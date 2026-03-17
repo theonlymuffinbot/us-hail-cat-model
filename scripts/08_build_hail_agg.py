@@ -13,6 +13,7 @@ uint16 is sufficient: max = 100 cells x 255 counts = 25,500 < 65,535.
 Resumable: skips files that already exist.
 """
 
+import gc
 import time
 from pathlib import Path
 import numpy as np
@@ -121,6 +122,13 @@ def main():
                 log(f"  ERROR writing {dst_path.name}: {e}")
                 errors += 1
                 dst_path.unlink(missing_ok=True)
+            finally:
+                del agg
+
+        # Explicit GC every 100 files to prevent memory buildup on low-RAM systems
+        del data, band_tags
+        if i % 100 == 0:
+            gc.collect()
 
         if i % 500 == 0 or i == len(tifs):
             log(f"  {i:,}/{len(tifs):,} | "

@@ -2,16 +2,15 @@
 """
 run_pipeline.py — CONUS Hail Cat Model: Full Pipeline Runner
 =============================================================
-Runs all 15 pipeline stages in order. Stops on the first failure
-and prints a clear error summary.
+Runs all 15 pipeline stages in order. Stops on any failure.
+Logs each stage to logs/<stage>.log and prints a live summary.
 
 Usage:
-    python run_pipeline.py             # run all stages
-    python run_pipeline.py --from 6    # resume from stage 6
-    python run_pipeline.py --only 5    # run a single stage
-    python run_pipeline.py --dry-run   # print what would run, don't execute
-
-Estimated total runtime: ~6–7 hours on a modern laptop.
+    python run_pipeline.py              # Run all stages
+    python run_pipeline.py --from 6     # Resume from stage 6
+    python run_pipeline.py --only 5     # Run a single stage
+    python run_pipeline.py --dry-run    # Print stages without running
+    python run_pipeline.py --skip 15    # Skip a stage (comma-separated)
 """
 
 import argparse
@@ -21,147 +20,186 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts"
+REPO_ROOT = Path(__file__).resolve().parent
+SCRIPTS   = REPO_ROOT / "scripts"
+LOGS      = REPO_ROOT / "logs"
 
 STAGES = [
-    (1,  "01_download_population.py",        "Download Census population data"),
-    (2,  "02_build_population_trend.py",      "Build population trend (1980–2023)"),
-    (3,  "03_download_spc.py",                "Download NOAA SPC storm reports"),
-    (4,  "04_build_storm_trends.py",          "Build county storm trends"),
-    (5,  "05_build_spatial_beta.py",          "Compute spatial neighbourhood beta"),
-    (6,  "06_build_hail_rasters.py",          "Build raw hail GeoTIFFs (~30 min)"),
-    (7,  "07_build_hail_debias.py",           "Population-debias hail rasters"),
-    (8,  "08_build_hail_agg.py",              "Aggregate to 0.25° and 0.50°"),
-    (9,  "09_build_hail_climo.py",            "Build daily climatology rasters"),
-    (10, "10_hail_catmodel_pipeline.py",      "Fit CDFs + spatial correlation (~2 hrs)"),
-    (11, "11_build_smooth_cdf.py",            "Build smoothed CDF surface"),
-    (12, "12_build_occurrence_probs.py",      "Compute annual occurrence probabilities"),
-    (13, "13_apply_conus_mask.py",            "Apply CONUS land mask"),
-    (14, "14_generate_stochastic_catalog.py", "Generate 50,000-yr stochastic catalog (~2.5 hrs)"),
-    (15, "15_stochastic_maps.py",             "Generate stochastic PET maps (~15 min)"),
+    (1,  "01_download_population.py",       "Download Census population data",          "~1 min"),
+    (2,  "02_build_population_trend.py",    "Build county population trend (1980–2023)","~1 min"),
+    (3,  "03_download_spc.py",              "Download NOAA SPC storm reports",          "~5 min"),
+    (4,  "04_build_storm_trends.py",        "Build storm trend / normalisation files",  "~2 min"),
+    (5,  "05_build_spatial_beta.py",        "Compute spatial neighbourhood beta",       "~2 min"),
+    (6,  "06_build_hail_rasters.py",        "Build raw 0.05° hail GeoTIFFs",           "~20 min"),
+    (7,  "07_build_hail_debias.py",         "Apply population debiasing to rasters",    "~20 min"),
+    (8,  "08_build_hail_agg.py",            "Aggregate to 0.25° and 0.50°",            "~10 min"),
+    (9,  "09_build_hail_climo.py",          "Build 366-day daily climatology",          "~5 min"),
+    (10, "10_hail_catmodel_pipeline.py",    "Fit CDFs + spatial correlation structure", "~30 min"),
+    (11, "11_build_smooth_cdf.py",          "Build spatially-pooled smooth CDF",        "~10 min"),
+    (12, "12_build_occurrence_probs.py",    "Compute annual occurrence probabilities",  "~5 min"),
+    (13, "13_apply_conus_mask.py",          "Apply CONUS land mask",                    "~5 min"),
+    (14, "14_generate_stochastic_catalog.py","Generate 50,000-yr stochastic catalog",  "~2.5 hrs"),
+    (15, "15_stochastic_maps.py",           "Build per-cell stochastic PET maps",       "~15 min"),
 ]
 
+# ANSI colours
+GREEN  = "\033[92m"
+RED    = "\033[91m"
+YELLOW = "\033[93m"
+CYAN   = "\033[96m"
+BOLD   = "\033[1m"
+RESET  = "\033[0m"
 
 def fmt_duration(seconds: float) -> str:
-    td = timedelta(seconds=int(seconds))
-    h, rem = divmod(td.seconds, 3600)
-    m, s = divmod(rem, 60)
-    if td.days:
-        h += td.days * 24
-    if h:
-        return f"{h}h {m:02d}m {s:02d}s"
-    elif m:
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    m, s = divmod(int(seconds), 60)
+    if m < 60:
         return f"{m}m {s:02d}s"
-    return f"{s}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m:02d}m"
 
+def print_header():
+    print(f"\n{BOLD}{'='*60}{RESET}")
+    print(f"{BOLD}  CONUS Hail Cat Model — Pipeline Runner{RESET}")
+    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  Repo: {REPO_ROOT}")
+    print(f"{BOLD}{'='*60}{RESET}\n")
 
-def run_stage(num: int, script: str, description: str, dry_run: bool) -> bool:
-    script_path = SCRIPTS_DIR / script
-    if not script_path.exists():
-        print(f"\n  ❌ Script not found: {script_path}")
-        return False
+def run_stage(num: int, script: str, desc: str, eta: str, dry_run: bool) -> bool:
+    script_path = SCRIPTS / script
+    log_path    = LOGS / f"{script.replace('.py', '')}.log"
+    LOGS.mkdir(exist_ok=True)
 
-    print(f"\n{'='*60}")
-    print(f"  Stage {num:02d}/15 — {description}")
-    print(f"  Script: scripts/{script}")
-    print(f"  Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'='*60}")
+    print(f"{BOLD}[{num:02d}/15]{RESET} {desc}")
+    print(f"        Script: {script}  (est. {eta})")
+    print(f"        Log:    {log_path.relative_to(REPO_ROOT)}")
 
     if dry_run:
-        print("  [dry-run] skipping execution")
+        print(f"        {YELLOW}[DRY RUN — skipped]{RESET}\n")
         return True
 
-    t0 = time.time()
-    try:
-        result = subprocess.run(
-            [sys.executable, str(script_path)],
-            cwd=str(script_path.parent.parent),  # repo root
-        )
-        elapsed = time.time() - t0
-        if result.returncode == 0:
-            print(f"\n  ✅ Stage {num:02d} complete ({fmt_duration(elapsed)})")
-            return True
-        else:
-            print(f"\n  ❌ Stage {num:02d} FAILED (exit code {result.returncode}) after {fmt_duration(elapsed)}")
-            return False
-    except KeyboardInterrupt:
-        print(f"\n  ⚠️  Interrupted by user at stage {num:02d}")
-        raise
+    if not script_path.exists():
+        print(f"        {RED}✗ Script not found: {script_path}{RESET}\n")
+        return False
 
+    t0 = time.time()
+    print(f"        {CYAN}▶ Running...{RESET}", flush=True)
+
+    try:
+        with open(log_path, "w") as log_fh:
+            log_fh.write(f"[{datetime.now().isoformat()}] Starting {script}\n\n")
+            log_fh.flush()
+            proc = subprocess.Popen(
+                [sys.executable, str(script_path)],
+                cwd=str(SCRIPTS),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                log_fh.write(line)
+                log_fh.flush()
+                # Print lines that look like progress/summary markers
+                stripped = line.strip()
+                if stripped and any(marker in stripped for marker in [
+                    "[", "Done", "Error", "WARNING", "✓", "✗",
+                    "written", "complete", "finished", "failed",
+                ]):
+                    print(f"        {stripped}")
+
+            proc.wait()
+            elapsed = time.time() - t0
+            log_fh.write(f"\n[{datetime.now().isoformat()}] Exit code: {proc.returncode} ({fmt_duration(elapsed)})\n")
+
+    except KeyboardInterrupt:
+        proc.terminate()
+        print(f"\n        {YELLOW}⚠ Interrupted by user{RESET}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"        {RED}✗ Exception: {e}{RESET}\n")
+        return False
+
+    elapsed = time.time() - t0
+    if proc.returncode == 0:
+        print(f"        {GREEN}✓ Done in {fmt_duration(elapsed)}{RESET}\n")
+        return True
+    else:
+        print(f"        {RED}✗ Failed (exit {proc.returncode}) after {fmt_duration(elapsed)}{RESET}")
+        print(f"        {RED}  See {log_path} for details{RESET}\n")
+        return False
 
 def main():
     parser = argparse.ArgumentParser(description="Run the CONUS hail cat model pipeline.")
-    parser.add_argument("--from", dest="from_stage", type=int, default=1, metavar="N",
-                        help="Start from stage N (default: 1)")
-    parser.add_argument("--only", dest="only_stage", type=int, default=None, metavar="N",
-                        help="Run only stage N")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print what would run without executing")
+    parser.add_argument("--from",   dest="from_stage", type=int, default=1,
+                        help="Start from this stage number (default: 1)")
+    parser.add_argument("--only",   dest="only_stage", type=int, default=None,
+                        help="Run only this stage number")
+    parser.add_argument("--skip",   dest="skip_stages", type=str, default="",
+                        help="Comma-separated stage numbers to skip")
+    parser.add_argument("--dry-run", dest="dry_run", action="store_true",
+                        help="Print stages without running them")
     args = parser.parse_args()
 
-    # Filter stages to run
+    skip = set()
+    if args.skip_stages:
+        try:
+            skip = {int(s.strip()) for s in args.skip_stages.split(",")}
+        except ValueError:
+            print(f"{RED}Invalid --skip value: {args.skip_stages}{RESET}")
+            sys.exit(1)
+
+    print_header()
+
+    # Determine which stages to run
     if args.only_stage is not None:
-        stages = [(n, s, d) for n, s, d in STAGES if n == args.only_stage]
-        if not stages:
-            print(f"Error: no stage {args.only_stage}")
+        stages_to_run = [s for s in STAGES if s[0] == args.only_stage]
+        if not stages_to_run:
+            print(f"{RED}No stage with number {args.only_stage}{RESET}")
             sys.exit(1)
     else:
-        stages = [(n, s, d) for n, s, d in STAGES if n >= args.from_stage]
+        stages_to_run = [s for s in STAGES if s[0] >= args.from_stage and s[0] not in skip]
 
-    if not stages:
-        print("No stages to run.")
-        sys.exit(0)
-
-    print(f"\n{'='*60}")
-    print(f"  CONUS Hail Cat Model Pipeline")
-    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    if args.dry_run:
-        print(f"  Mode: DRY RUN")
-    elif args.only_stage:
-        print(f"  Mode: single stage ({args.only_stage})")
-    else:
-        print(f"  Mode: stages {stages[0][0]}–{stages[-1][0]} of 15")
-    print(f"{'='*60}")
+    total = len(stages_to_run)
+    print(f"  Stages to run: {total}")
+    if skip:
+        print(f"  Skipping:      {sorted(skip)}")
+    if args.from_stage > 1:
+        print(f"  Resuming from: stage {args.from_stage}")
+    print()
 
     pipeline_start = time.time()
-    completed = []
-    failed = None
+    results = []
 
-    try:
-        for num, script, description in stages:
-            ok = run_stage(num, script, description, args.dry_run)
-            if ok:
-                completed.append(num)
-            else:
-                failed = num
-                break
-    except KeyboardInterrupt:
-        pass
+    for num, script, desc, eta in stages_to_run:
+        ok = run_stage(num, script, desc, eta, args.dry_run)
+        results.append((num, script, desc, ok))
+        if not ok and not args.dry_run:
+            print(f"{RED}{BOLD}Pipeline stopped at stage {num}.{RESET}")
+            print(f"Fix the issue and resume with:  python run_pipeline.py --from {num}\n")
+            break
 
     # Summary
     total_elapsed = time.time() - pipeline_start
-    print(f"\n{'='*60}")
-    print(f"  Pipeline Summary ({fmt_duration(total_elapsed)} total)")
-    print(f"{'='*60}")
-    for num, script, description in STAGES:
-        if num in completed:
-            print(f"  ✅ Stage {num:02d} — {description}")
-        elif num == failed:
-            print(f"  ❌ Stage {num:02d} — {description}  ← FAILED")
-        elif num > (failed or 0) and num not in completed:
-            skipped = num >= (failed or 999)
-            if skipped and failed:
-                print(f"  ⏭️  Stage {num:02d} — {description}  (skipped)")
+    passed = sum(1 for _, _, _, ok in results if ok)
+    failed = sum(1 for _, _, _, ok in results if not ok)
 
-    if failed:
-        print(f"\n  ❌ Pipeline stopped at stage {failed}.")
-        print(f"     Fix the issue and resume with:  python run_pipeline.py --from {failed}")
-        sys.exit(1)
-    elif not args.dry_run:
-        print(f"\n  🎉 All stages complete!")
+    print(f"{BOLD}{'='*60}{RESET}")
+    print(f"{BOLD}  Summary{RESET}  ({fmt_duration(total_elapsed)} total)")
+    print(f"{BOLD}{'='*60}{RESET}")
+    for num, script, desc, ok in results:
+        icon = f"{GREEN}✓{RESET}" if ok else f"{RED}✗{RESET}"
+        print(f"  {icon}  [{num:02d}] {desc}")
+
+    print()
+    if failed == 0 and not args.dry_run:
+        print(f"{GREEN}{BOLD}  ✓ All {passed} stage(s) completed successfully!{RESET}\n")
+    elif args.dry_run:
+        print(f"{YELLOW}  Dry run complete — nothing was executed.{RESET}\n")
     else:
-        print(f"\n  [dry-run complete — nothing was executed]")
-
+        print(f"{RED}{BOLD}  {failed} stage(s) failed. {passed} succeeded.{RESET}\n")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
