@@ -66,7 +66,7 @@ print("=== Loading inputs ===", flush=True)
 
 act_idx  = np.load(STOCH/"active_flat_idx.npy")   # (12811,)
 cdf_p    = np.load(STOCH/"cdf_quant_p.npy")       # (2000,)
-chol_L   = np.load(HIST/"cholesky_L.npy")          # (800,800)
+chol_L   = np.load(HIST/"cholesky_L_150km.npy")   # (800,800)
 seed_idx = np.load(HIST/"corr_cell_idx.npy")       # (800,)
 N_ACT    = len(act_idx)
 N_SEED   = len(seed_idx)

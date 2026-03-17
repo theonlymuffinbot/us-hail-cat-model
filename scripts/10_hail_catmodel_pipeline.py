@@ -306,18 +306,6 @@ if event_windows:
     durations = [e - s + 1 for s, e in event_windows]
     print(f"  Max window duration (days):  {max(durations)}")
 
-# Cap event windows at 7 days (max synoptic event crossing CONUS)
-MAX_EVENT_DAYS = 7
-capped_windows = []
-for start, end in event_windows:
-    s = start
-    while s <= end:
-        e = min(s + MAX_EVENT_DAYS - 1, end)
-        capped_windows.append((s, e))
-        s = e + 1
-event_windows = capped_windows
-print(f"  After 7-day cap: {len(event_windows)} windows")
-
 # 2.3 Spatial continuity — split disconnected windows
 def footprints_overlap(fp1, fp2, buffer_cells=2):
     return np.any(binary_dilation(fp1, iterations=buffer_cells) & fp2)
