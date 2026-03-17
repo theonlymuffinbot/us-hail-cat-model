@@ -12,7 +12,7 @@ Adapted from design doc with the following known dataset properties:
   - Spatial extent: lon [-125, -66], lat [24, 50] (CONUS)
 """
 
-import os, re, glob, json, time, random, warnings
+import os, re, glob, json, sys, time, random, warnings
 warnings.filterwarnings('ignore')
 
 import rasterio
