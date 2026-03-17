@@ -130,7 +130,7 @@ log("=" * 60)
 # ═══════════════════════════════════════════════════════════════════════════════
 log("\n[1] Loading Cholesky factor and seed cells")
 
-L_seed   = np.load(ROOT / "cholesky_L_150km.npy")        # (800, 800)
+L_seed   = np.load(ROOT / "cholesky_L.npy")               # (800, 800)
 seed_idx = np.load(ROOT / "corr_cell_idx.npy")            # (800,)
 n_seed   = len(seed_idx)
 
@@ -155,6 +155,10 @@ n_active     = len(active_flat)
 active_lats  = np.array([cell_latlon(i)[0] for i in active_flat], dtype=np.float32)
 active_lons  = np.array([cell_latlon(i)[1] for i in active_flat], dtype=np.float32)
 p_occ_active = p_occ_grid.ravel()[active_flat]
+
+# Save active cell indices so downstream scripts (15_stochastic_maps.py) can load them
+np.save(OUT_DIR / "active_flat_idx.npy", active_flat)
+log(f"  Saved active_flat_idx.npy ({n_active:,} cells)")
 
 del p_occ_grid
 gc.collect()

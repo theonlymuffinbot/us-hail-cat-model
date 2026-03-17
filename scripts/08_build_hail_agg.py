@@ -2,8 +2,8 @@
 """
 Hail Daily Spatial Aggregation
 ===============================
-Reads raw 0.05° daily hail GeoTIFFs and writes block-summed versions
-at 0.25° (5x5).
+Reads debiased 0.05° daily hail GeoTIFFs and writes block-summed versions
+at 0.25° (5x5) and 0.50° (10x10).
 
 Source:  data/hail_0.05deg_pop_debias/YYYY/hail_YYYYMMDD.tif  (float32, 29 bands)
 Output:  data/hail_0.25deg/YYYY/hail_YYYYMMDD.tif  (uint16)

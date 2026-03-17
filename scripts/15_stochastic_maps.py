@@ -66,7 +66,7 @@ print("=== Loading inputs ===", flush=True)
 
 act_idx  = np.load(STOCH/"active_flat_idx.npy")   # (12811,)
 cdf_p    = np.load(STOCH/"cdf_quant_p.npy")       # (2000,)
-chol_L   = np.load(HIST/"cholesky_L_150km.npy")   # (800,800)
+chol_L   = np.load(HIST/"cholesky_L.npy")          # (800,800)
 seed_idx = np.load(HIST/"corr_cell_idx.npy")       # (800,)
 N_ACT    = len(act_idx)
 N_SEED   = len(seed_idx)
@@ -201,13 +201,9 @@ for i, flat in enumerate(act_idx):
     poc_any[row, col] = p
     for t in POCC_T:
         poc_g[t][row, col] = float(np.mean(ann >= t))
-    nz = ann[ann >= THRESH]
-    if len(nz) < 5 or p <= 0:
-        continue
-    sv = np.sort(nz)
     for rp in RP_YRS:
-        ce = (1.0/rp) / p
-        rp_g[rp][row, col] = float(sv[-1] if ce >= 1.0 else np.quantile(sv, 1.0-ce))
+        q = float(np.quantile(ann, 1.0 - 1.0 / rp))
+        rp_g[rp][row, col] = q if q >= THRESH else NODATA
 
 del ann_max
 

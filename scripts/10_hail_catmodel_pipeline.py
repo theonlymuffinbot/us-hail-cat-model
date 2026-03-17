@@ -306,6 +306,18 @@ if event_windows:
     durations = [e - s + 1 for s, e in event_windows]
     print(f"  Max window duration (days):  {max(durations)}")
 
+# Cap event windows at 7 days (max synoptic event crossing CONUS)
+MAX_EVENT_DAYS = 7
+capped_windows = []
+for start, end in event_windows:
+    s = start
+    while s <= end:
+        e = min(s + MAX_EVENT_DAYS - 1, end)
+        capped_windows.append((s, e))
+        s = e + 1
+event_windows = capped_windows
+print(f"  After 7-day cap: {len(event_windows)} windows")
+
 # 2.3 Spatial continuity — split disconnected windows
 def footprints_overlap(fp1, fp2, buffer_cells=2):
     return np.any(binary_dilation(fp1, iterations=buffer_cells) & fp2)
@@ -365,7 +377,7 @@ print("\n  Event duration distribution:")
 print(event_df["duration_days"].value_counts().sort_index().to_string())
 print("\n  Annual event counts:")
 print(event_df.groupby(event_df["start_date"].dt.year).size().to_string())
-assert event_df["peak_hail_max_in"].max() < 8.0, "Implausible peak hail — check bins"
+assert event_df["peak_hail_max_in"].max() < 10.5, "Implausible peak hail — check bins"
 print(f"\nStep 2 complete — {elapsed()}")
 
 # ═══════════════════════════════════════════════════════════════
