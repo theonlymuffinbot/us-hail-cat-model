@@ -66,9 +66,6 @@ data/                    # hail cat model
     return_periods.tif                    ← Step 10b output
   hail_0.25deg_climo/
     climo_MMDD.tif (366 files)            ← Step 9 output
-  hail_0.50deg/                           ← Step 8 output
-  hail_0.50deg_CDF/                       ← Step 10b output
-  hail_0.50deg_climo/                     ← Step 9 output
 ```
 
 ---
@@ -289,20 +286,18 @@ python3 build_hail_debias.py
 
 ---
 
-### Step 8 — Spatial Aggregation to 0.25° and 0.50°
+### Step 8 — Spatial Aggregation to 0.25°
 
 **Script:** `data/build_hail_agg.py`
 
-Block-sums the 0.05° rasters to coarser resolutions.
+Block-sums the 0.05° rasters to coarser resolution.
 
 **Method:** Sum within each N×N block (aggregation = sum, not average — counts are additive)
 - 0.25° = 5×5 block sum → 236 × 104 grid
-- 0.50° = 10×10 block sum → 118 × 52 grid
 
-**Input:** `data/hail_0.05deg_pop_debias/` (Step 7)  
+**Input:** `data/hail_0.05deg_pop_debias/` (Step 7)
 **Output:**
 - `data/hail_0.25deg/YYYY/hail_YYYYMMDD.tif` (uint16)
-- `data/hail_0.50deg/YYYY/hail_YYYYMMDD.tif` (uint16)
 
 ```bash
 python3 build_hail_agg.py
@@ -320,10 +315,9 @@ For each calendar day of the year (366 days), sums report counts across all year
 
 **Method:** For each MMDD, sum band counts over all available years. Leap day (0229) uses only leap years: 2004, 2008, 2012, 2016, 2020, 2024. Missing year-days (no storm file) treated as zero.
 
-**Input:** `hail_0.25deg/` and `hail_0.50deg/` (Step 8)  
+**Input:** `hail_0.25deg/` (Step 8)
 **Output:**
 - `hail_0.25deg_climo/climo_MMDD.tif` (366 files, uint16, 29 bands each)
-- `hail_0.50deg_climo/climo_MMDD.tif` (366 files)
 
 ```bash
 python3 build_hail_climo.py

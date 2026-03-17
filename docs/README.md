@@ -27,9 +27,6 @@
 ```
 /Volumes/bitcoin/data/
 ├── hail_0.25deg/          ← Cat model outputs + storm rasters
-├── hail_0.50deg/          ← Storm rasters (0.50° resolution)
 ├── hail_0.25deg_CDF/      ← Empirical CDF + Weibull + return periods
-├── hail_0.50deg_CDF/      ← Same at 0.50°
 ├── hail_0.25deg_climo/    ← 366 daily climatology files
-└── hail_0.50deg_climo/    ← Same at 0.50°
 ```

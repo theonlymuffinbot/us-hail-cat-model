@@ -2,7 +2,7 @@
 """
 build_hail_climo.py
 
-Generate daily climatology rasters for 0.25deg and 0.50deg hail data.
+Generate daily climatology rasters for 0.25deg hail data.
 
 For each calendar day (MMDD, 0101–1231 + 0229):
   - Sum the 29-band report counts across all available years (2004–2025)
@@ -13,7 +13,6 @@ Leap day (0229) uses only leap years: 2004,2008,2012,2016,2020,2024.
 
 Output:
   data/hail_0.25deg_climo/climo_MMDD.tif  (366 files)
-  data/hail_0.50deg_climo/climo_MMDD.tif  (366 files)
 """
 
 import numpy as np
@@ -35,11 +34,6 @@ RESOLUTIONS = [
         'label':   '0.25deg',
         'in_dir':  str(DATA_ROOT / 'hail_0.25deg'),
         'out_dir': str(DATA_ROOT / 'hail_0.25deg_climo'),
-    },
-    {
-        'label':   '0.50deg',
-        'in_dir':  str(DATA_ROOT / 'hail_0.50deg'),
-        'out_dir': str(DATA_ROOT / 'hail_0.50deg_climo'),
     },
 ]
 

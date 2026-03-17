@@ -3,11 +3,10 @@
 Hail Daily Spatial Aggregation
 ===============================
 Reads raw 0.05° daily hail GeoTIFFs and writes block-summed versions
-at 0.25° (5x5) and 0.50° (10x10).
+at 0.25° (5x5).
 
 Source:  data/hail_0.05deg_pop_debias/YYYY/hail_YYYYMMDD.tif  (float32, 29 bands)
 Output:  data/hail_0.25deg/YYYY/hail_YYYYMMDD.tif  (uint16)
-         data/hail_0.50deg/YYYY/hail_YYYYMMDD.tif  (uint16)
 
 Aggregation: SUM — counts are additive across space.
 uint16 is sufficient: max = 100 cells x 255 counts = 25,500 < 65,535.
@@ -36,7 +35,6 @@ NCOLS   = 1180
 
 RESOLUTIONS = {
     "hail_0.25deg": 5,
-    "hail_0.50deg": 10,
 }
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -127,7 +125,6 @@ def main():
         if i % 500 == 0 or i == len(tifs):
             log(f"  {i:,}/{len(tifs):,} | "
                 f"0.25°: done={done['hail_0.25deg']:,} skip={skip['hail_0.25deg']:,} | "
-                f"0.50°: done={done['hail_0.50deg']:,} skip={skip['hail_0.50deg']:,} | "
                 f"err={errors}")
 
     log("Done.")

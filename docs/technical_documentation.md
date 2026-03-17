@@ -77,12 +77,8 @@ hail_model/
 │   │   └── YYYY/hail_YYYYMMDD.tif
 │   ├── hail_0.25deg/                 # Aggregated 0.25° rasters + model outputs
 │   │   └── YYYY/hail_YYYYMMDD.tif
-│   ├── hail_0.50deg/                 # Aggregated 0.50° rasters
-│   │   └── YYYY/hail_YYYYMMDD.tif
 │   ├── hail_0.25deg_CDF/             # CDF layer (0.25°)
-│   ├── hail_0.50deg_CDF/             # CDF layer (0.50°)
 │   ├── hail_0.25deg_climo/           # Daily climatology (0.25°)
-│   ├── hail_0.50deg_climo/           # Daily climatology (0.50°)
 │   ├── stochastic/                   # Stochastic catalog outputs
 │   ├── population/                   # Census population CSVs
 │   └── storms/                       # County storm count CSVs
@@ -113,7 +109,7 @@ For each SPC daily CSV, reports are binned onto a 0.05° grid:
 - Compression: LZW
 - Output: `data/hail_0.05deg/YYYY/hail_YYYYMMDD.tif` (only written for days with ≥1 report)
 
-### 3.2 Aggregated Rasters (0.25° and 0.50°)
+### 3.2 Aggregated Rasters (0.25°)
 
 **Script:** `scripts/08_build_hail_agg.py`
 
@@ -122,7 +118,6 @@ Aggregates 0.05° rasters by summing within each coarser cell. No interpolation 
 | Resolution | Grid | Aggregation |
 |---|---|---|
 | 0.25° | 236 × 104 | 5×5 sum of 0.05° cells |
-| 0.50° | 118 × 52 | 10×10 sum of 0.05° cells |
 
 ---
 
@@ -189,7 +184,7 @@ Units: inches. Zero where insufficient data (< 10 hail days in pixel).
 ## 5. Daily Climatology
 
 **Script:** `scripts/09_build_hail_climo.py`
-**Output dirs:** `data/hail_0.25deg_climo/`, `data/hail_0.50deg_climo/`
+**Output dir:** `data/hail_0.25deg_climo/`
 
 ### Method
 
@@ -376,7 +371,7 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 | `lambda_comparison.png` | PNG | 152 KB | λ validation plots |
 | `correlation_decay_fit.png` | PNG | 138 KB | Correlation decay scatter |
 
-### CDF Layer (`data/hail_0.25deg_CDF/`, `data/hail_0.50deg_CDF/`)
+### CDF Layer (`data/hail_0.25deg_CDF/`)
 
 | File | Bands | Description |
 |---|---|---|
@@ -384,7 +379,7 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 | `weibull_params.tif` | 4 | k, λ, annual_rate, n_events (Weibull fit) |
 | `return_periods.tif` | 6 | 2/5/10/25/50/100yr hail size (Weibull + compound Poisson) |
 
-### Daily Climatology (`data/hail_0.25deg_climo/`, `data/hail_0.50deg_climo/`)
+### Daily Climatology (`data/hail_0.25deg_climo/`)
 
 - **366 files** per resolution: `climo_MMDD.tif` (e.g., `climo_0601.tif`)
 - **29 bands** per file (one per size bin)

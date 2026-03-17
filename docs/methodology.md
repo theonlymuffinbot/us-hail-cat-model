@@ -314,7 +314,7 @@ Same grid dimensions and 29-band structure as the raw rasters, but float32 (frac
 
 ### Step 8: Aggregate to Coarser Resolution (`08_build_hail_agg.py`)
 
-**What it does:** Combines the fine 0.05-degree rasters into coarser 0.25-degree and 0.50-degree grids.
+**What it does:** Combines the fine 0.05-degree rasters into a coarser 0.25-degree grid.
 
 **Why we need it:** At 0.05 degrees (~5.5 km), the vast majority of grid cells have zero or one hail report across 22 years. This sparsity makes it impossible to fit a reliable statistical distribution cell-by-cell. Aggregating to 0.25 degrees (~28 km) gives each cell a 5×5 block of fine-resolution cells to draw data from, dramatically increasing the number of non-zero observations per cell and stabilizing the CDF fits.
 
@@ -323,11 +323,9 @@ Same grid dimensions and 29-band structure as the raw rasters, but float32 (frac
 | Resolution | Grid size | Block |
 |---|---|---|
 | 0.25° | 236 × 104 = 24,544 cells | 5×5 of 0.05° cells |
-| 0.50° | 118 × 52 = 6,136 cells | 10×10 of 0.05° cells |
 
 **Output:**
 - `data/hail_0.25deg/YYYY/hail_YYYYMMDD.tif` (uint16)
-- `data/hail_0.50deg/YYYY/hail_YYYYMMDD.tif` (uint16)
 
 ---
 

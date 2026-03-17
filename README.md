@@ -109,7 +109,7 @@ Steps 3, 6, 7, 8 are re-runnable — they skip existing files.
 | 5 | `05_build_spatial_beta.py` | Compute spatial neighborhood beta per county | 1 min |
 | 6 | `06_build_hail_rasters.py` | Build raw 0.05° daily hail rasters from SPC reports | 2 hrs |
 | 7 | `07_build_hail_debias.py` | Apply population debiasing (β = 2.37) to raw rasters | 30 min |
-| 8 | `08_build_hail_agg.py` | Aggregate debiased rasters to 0.25° and 0.50° | 30 min |
+| 8 | `08_build_hail_agg.py` | Aggregate debiased rasters to 0.25° | 30 min |
 | 9 | `09_build_hail_climo.py` | Build 366-file daily climatology by calendar day | 5 min |
 | 10 | `10_hail_catmodel_pipeline.py` | Fit CDFs, identify events, compute return periods, spatial correlation | 6 min |
 | 11 | `11_build_smooth_cdf.py` | Spatially-pooled CDF rebuild with 150 km smoothing | 10 min |
@@ -166,9 +166,6 @@ hail_model/
 │   │   ├── lambda_km.json                 ← committed
 │   │   └── event_catalog.csv             ← committed
 │   ├── hail_0.25deg_climo/                ← Step 9 output (gitignored)
-│   ├── hail_0.50deg/                      ← Step 8 output (gitignored)
-│   ├── hail_0.50deg_CDF/                  ← gitignored
-│   ├── hail_0.50deg_climo/                ← gitignored
 │   └── stochastic/
 │       ├── pet_occurrence.csv             ← committed (2.2 MB)
 │       ├── pet_aggregate.csv              ← committed (2.0 MB)

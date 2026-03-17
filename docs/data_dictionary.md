@@ -21,20 +21,11 @@ All GeoTIFF rasters share:
 | Lat extent | 24.00 to 50.00 |
 | Origin (upper-left) | (−125.00, 50.00) |
 
-### 0.50° Grid
-
-| Property | Value |
-|---|---|
-| Cols × Rows | 118 × 52 |
-| Cell size | 0.50° × 0.50° (~56 km at 37°N) |
-| Lon extent | −125.00 to −66.00 |
-| Lat extent | 24.00 to 50.00 |
-
 ---
 
 ## Daily Storm Rasters
 
-**Paths:** `data/hail_0.25deg/YYYY/hail_YYYYMMDD.tif`, `data/hail_0.50deg/YYYY/hail_YYYYMMDD.tif`
+**Path:** `data/hail_0.25deg/YYYY/hail_YYYYMMDD.tif`
 
 Only written for days with at least one SPC hail report. Missing dates = no hail.
 
@@ -104,7 +95,7 @@ Only written for days with at least one SPC hail report. Missing dates = no hail
 
 ## Daily Climatology Files
 
-**Path:** `data/hail_0.25deg_climo/climo_MMDD.tif`, `data/hail_0.50deg_climo/climo_MMDD.tif`
+**Path:** `data/hail_0.25deg_climo/climo_MMDD.tif`
 
 366 files total (including Feb 29). Naming: `climo_0101.tif` through `climo_1231.tif`.
 
@@ -232,8 +223,8 @@ To recover (row, col): `row = idx // 236`, `col = idx % 236`
 | `scripts/05_build_spatial_beta.py` | `data/storms/county_beta_map.csv` | 1 min |
 | `scripts/06_build_hail_rasters.py` | `data/hail_0.05deg/` | 2 hrs |
 | `scripts/07_build_hail_debias.py` | `data/hail_0.05deg_pop_debias/` | 30 min |
-| `scripts/08_build_hail_agg.py` | `data/hail_0.25deg/`, `data/hail_0.50deg/` | 30 min |
-| `scripts/09_build_hail_climo.py` | `data/hail_*_climo/` | 5 min |
+| `scripts/08_build_hail_agg.py` | `data/hail_0.25deg/` | 30 min |
+| `scripts/09_build_hail_climo.py` | `data/hail_0.25deg_climo/` | 5 min |
 | `scripts/10_hail_catmodel_pipeline.py` | Cat model outputs | 6 min |
 | `scripts/11_build_smooth_cdf.py` | Updated RP rasters | 10 min |
 | `scripts/12_build_occurrence_probs.py` | `data/hail_0.25deg/p_occ_*.tif` | 5 min |

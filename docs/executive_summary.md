@@ -31,7 +31,7 @@ The model is built entirely from publicly available NOAA Storm Prediction Center
 | Metric | Value |
 |---|---|
 | Period of record | 2004–2025 (22 complete years + partial 2026) |
-| Grid resolution | 0.25° (~28 km), also 0.50° (~56 km) |
+| Grid resolution | 0.25° (~28 km) |
 | Total events identified | 2,928 |
 | Mean events per year | 127 |
 | Largest single event footprint | 867 grid cells (~670,000 km²) |

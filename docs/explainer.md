@@ -213,9 +213,8 @@ Every grid cell gets assigned to its nearest county centroid. That county's β d
 
 ### Step 3: Spatial Aggregation
 
-The raw 0.05° grid is quite fine — useful for accuracy, but a lot of data (~4,700 days × 614,000 cells). For the cat model work, we aggregated to coarser grids:
+The raw 0.05° grid is quite fine — useful for accuracy, but a lot of data (~4,700 days × 614,000 cells). For the cat model work, we aggregated to a coarser grid:
 - **0.25°** (~28 km): 236 columns × 104 rows — the main working resolution
-- **0.50°** (~55 km): 118 columns × 52 rows — used for cross-checks
 
 Aggregation method: **sum**. If 5 hail reports land in a 0.25° cell, the aggregated cell stores 5 (not an average). This preserves the total count of reports.
 
