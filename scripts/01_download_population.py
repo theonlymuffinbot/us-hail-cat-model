@@ -63,6 +63,34 @@ def fetch_csv(url, encoding="latin-1"):
         raw = resp.read()
     return list(csv.DictReader(io.StringIO(raw.decode(encoding))))
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    import csv as _csv
+    import sys
+    errors = []
+
+    if not OUT_FILE.exists():
+        errors.append(f"Missing: {OUT_FILE}")
+    elif OUT_FILE.stat().st_size == 0:
+        errors.append(f"Empty: {OUT_FILE}")
+    else:
+        try:
+            with open(OUT_FILE, newline="") as f:
+                rows = list(_csv.DictReader(f))
+            if len(rows) <= 100:
+                errors.append(f"Too few rows: {len(rows)} (expected >100)")
+        except Exception as e:
+            errors.append(f"Cannot read CSV: {e}")
+
+    if errors:
+        log("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            log(f"  ✗ {e}")
+        return False
+    log("Output validation passed ✓")
+    return True
+
+
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -142,5 +170,17 @@ def main():
     log(f"  Join SPC storm data on FIPS (5-digit) + year.")
     log(f"  Normalize: storms_per_100k = storm_count / population * 100_000")
 
+    if not validate_outputs():
+        import sys
+        sys.exit(1)
+
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--validate", action="store_true")
+    args = parser.parse_args()
+    if args.validate:
+        import sys
+        ok = validate_outputs()
+        sys.exit(0 if ok else 1)
     main()

@@ -78,6 +78,60 @@ FLUSH_EVERY_YEARS = 500
 T0 = time.time()
 
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    import sys
+    errors = []
+
+    files_to_check = [
+        OUT_DIR / "cdf_lookup.npy",
+        OUT_DIR / "stochastic_event_summary.csv",
+        OUT_DIR / "stochastic_cell_sample.csv",
+        OUT_DIR / "pet_occurrence.csv",
+        OUT_DIR / "pet_aggregate.csv",
+    ]
+
+    for p in files_to_check:
+        if not p.exists():
+            errors.append(f"Missing: {p.name}")
+        elif p.stat().st_size == 0:
+            errors.append(f"Empty: {p.name}")
+
+    # Deep checks
+    npy = OUT_DIR / "cdf_lookup.npy"
+    if npy.exists() and npy.stat().st_size > 0:
+        try:
+            np.load(npy, mmap_mode="r")
+        except Exception as e:
+            errors.append(f"Cannot load cdf_lookup.npy: {e}")
+
+    for csv_name in ["stochastic_event_summary.csv", "pet_occurrence.csv"]:
+        p = OUT_DIR / csv_name
+        if p.exists() and p.stat().st_size > 0:
+            try:
+                import csv as _csv
+                with open(p, newline="") as f:
+                    rows = list(_csv.DictReader(f))
+                if len(rows) <= 1000:
+                    errors.append(f"Too few rows in {csv_name}: {len(rows)} (expected >1000)")
+            except Exception as e:
+                errors.append(f"Cannot read {csv_name}: {e}")
+
+    if errors:
+        print("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            print(f"  ✗ {e}")
+        return False
+    print("Output validation passed ✓")
+    return True
+
+
+# ── --validate early exit ──────────────────────────────────────────────────────
+if "--validate" in sys.argv:
+    ok = validate_outputs()
+    sys.exit(0 if ok else 1)
+
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 def log(msg):
     ts   = time.strftime("%H:%M:%S")
@@ -581,3 +635,6 @@ log(f"  pet_occurrence.csv")
 log(f"  pet_aggregate.csv")
 log(f"  ann_*.npy                       (annual tracker arrays)")
 log(f"\nParameters: lambda={LAMBDA_KM}km  N={N_SIM_YEARS:,}yr  seed={RNG_SEED}")
+
+if not validate_outputs():
+    sys.exit(1)

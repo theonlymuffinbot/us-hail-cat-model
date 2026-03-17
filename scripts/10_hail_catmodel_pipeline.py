@@ -39,6 +39,46 @@ T0 = time.time()
 def elapsed():
     return f"{(time.time()-T0)/60:.1f} min"
 
+
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    errors = []
+    root = DATA_ROOT / "hail_0.25deg"
+    rp_files = [f"rp_{t}yr_hail.tif" for t in [10, 25, 50, 100, 200, 250, 500]]
+    expected = rp_files + ["p_occurrence.tif", "event_catalog.csv",
+                           "event_peak_array.npy", "cholesky_L.npy",
+                           "corr_cell_idx.npy", "lambda_km.json"]
+
+    for fname in expected:
+        p = root / fname
+        if not p.exists():
+            errors.append(f"Missing: {fname}")
+        elif p.stat().st_size == 0:
+            errors.append(f"Empty: {fname}")
+
+    for fname in rp_files + ["p_occurrence.tif"]:
+        p = root / fname
+        if p.exists():
+            try:
+                with rasterio.open(p) as src:
+                    src.read(1)
+            except Exception as e:
+                errors.append(f"Cannot read {fname}: {e}")
+
+    if errors:
+        print("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            print(f"  ✗ {e}")
+        return False
+    print("Output validation passed ✓")
+    return True
+
+
+# ── --validate early exit ──────────────────────────────────────────────────────
+if "--validate" in sys.argv:
+    ok = validate_outputs()
+    sys.exit(0 if ok else 1)
+
 print("="*60)
 print("HAIL CAT MODEL PIPELINE")
 print("="*60)
@@ -676,3 +716,6 @@ print(f"  GPD thresh    = {GPD_THRESHOLD_IN} in")
 print(f"  lambda        = {lambda_km:.1f} km")
 print(f"  n_events      = {len(event_df)}")
 print(f"  n_years       = {n_years}")
+
+if not validate_outputs():
+    sys.exit(1)

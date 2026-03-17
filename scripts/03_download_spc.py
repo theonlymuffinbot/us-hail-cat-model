@@ -45,6 +45,39 @@ def download_one(url, outfile):
     except Exception as e:
         return f"err:{e}"
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    import csv as _csv
+    import random
+    import sys
+    errors = []
+
+    if not OUT_DIR.exists():
+        errors.append(f"Missing directory: {OUT_DIR}")
+    else:
+        csv_files = list(OUT_DIR.rglob("*.csv"))
+        if len(csv_files) <= 1000:
+            errors.append(f"Too few CSV files: {len(csv_files)} (expected >1000)")
+        else:
+            sample = random.sample(csv_files, min(5, len(csv_files)))
+            for p in sample:
+                try:
+                    with open(p, newline="") as f:
+                        rows = list(_csv.reader(f))
+                    if len(rows) == 0:
+                        errors.append(f"Empty CSV: {p.name}")
+                except Exception as e:
+                    errors.append(f"Cannot read {p.name}: {e}")
+
+    if errors:
+        log("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            log(f"  ✗ {e}")
+        return False
+    log("Output validation passed ✓")
+    return True
+
+
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     start = date(2004, 3, 1)
@@ -86,5 +119,17 @@ def main():
     saved = counts["ok"] + counts["skip"]
     log(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Done! Files with data: {counts['ok']} new + {counts['skip']} already had. Total in archive: {counts['ok']+counts['skip']}")
 
+    if not validate_outputs():
+        import sys
+        sys.exit(1)
+
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--validate", action="store_true")
+    args = parser.parse_args()
+    if args.validate:
+        import sys
+        ok = validate_outputs()
+        sys.exit(0 if ok else 1)
     main()

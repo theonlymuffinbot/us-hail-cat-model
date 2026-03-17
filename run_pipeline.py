@@ -11,6 +11,7 @@ Usage:
     python run_pipeline.py --only 5     # Run a single stage
     python run_pipeline.py --dry-run    # Print stages without running
     python run_pipeline.py --skip 15    # Skip a stage (comma-separated)
+    python run_pipeline.py --validate   # Validate outputs of all (or selected) stages
 """
 
 import argparse
@@ -66,11 +67,13 @@ def print_header():
     print(f"  Repo: {REPO_ROOT}")
     print(f"{BOLD}{'='*60}{RESET}\n")
 
-def run_stage(num: int, script: str, desc: str, eta: str, dry_run: bool) -> bool:
+def run_stage(num: int, script: str, desc: str, eta: str, dry_run: bool,
+              validate_only: bool = False) -> bool:
     script_path = SCRIPTS / script
     log_path    = LOGS / f"{script.replace('.py', '')}.log"
     LOGS.mkdir(exist_ok=True)
 
+    mode_label = "validate" if validate_only else "run"
     print(f"{BOLD}[{num:02d}/15]{RESET} {desc}")
     print(f"        Script: {script}  (est. {eta})")
     print(f"        Log:    {log_path.relative_to(REPO_ROOT)}")
@@ -84,14 +87,18 @@ def run_stage(num: int, script: str, desc: str, eta: str, dry_run: bool) -> bool
         return False
 
     t0 = time.time()
-    print(f"        {CYAN}▶ Running...{RESET}", flush=True)
+    print(f"        {CYAN}▶ {'Validating' if validate_only else 'Running'}...{RESET}", flush=True)
+
+    cmd = [sys.executable, str(script_path)]
+    if validate_only:
+        cmd.append("--validate")
 
     try:
         with open(log_path, "w") as log_fh:
-            log_fh.write(f"[{datetime.now().isoformat()}] Starting {script}\n\n")
+            log_fh.write(f"[{datetime.now().isoformat()}] Starting {script} ({mode_label})\n\n")
             log_fh.flush()
             proc = subprocess.Popen(
-                [sys.executable, str(script_path)],
+                cmd,
                 cwd=str(SCRIPTS),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -140,6 +147,8 @@ def main():
                         help="Comma-separated stage numbers to skip")
     parser.add_argument("--dry-run", dest="dry_run", action="store_true",
                         help="Print stages without running them")
+    parser.add_argument("--validate", dest="validate_only", action="store_true",
+                        help="Run each stage with --validate (skip computation, check outputs only)")
     args = parser.parse_args()
 
     skip = set()
@@ -151,6 +160,9 @@ def main():
             sys.exit(1)
 
     print_header()
+
+    if args.validate_only:
+        print(f"  {YELLOW}Mode: VALIDATE ONLY — checking outputs, skipping computation{RESET}")
 
     # Determine which stages to run
     if args.only_stage is not None:
@@ -173,7 +185,7 @@ def main():
     results = []
 
     for num, script, desc, eta in stages_to_run:
-        ok = run_stage(num, script, desc, eta, args.dry_run)
+        ok = run_stage(num, script, desc, eta, args.dry_run, args.validate_only)
         results.append((num, script, desc, ok))
         if not ok and not args.dry_run:
             print(f"{RED}{BOLD}Pipeline stopped at stage {num}.{RESET}")
@@ -194,7 +206,8 @@ def main():
 
     print()
     if failed == 0 and not args.dry_run:
-        print(f"{GREEN}{BOLD}  ✓ All {passed} stage(s) completed successfully!{RESET}\n")
+        mode_word = "validation" if args.validate_only else "stage(s)"
+        print(f"{GREEN}{BOLD}  ✓ All {passed} {mode_word} completed successfully!{RESET}\n")
     elif args.dry_run:
         print(f"{YELLOW}  Dry run complete — nothing was executed.{RESET}\n")
     else:

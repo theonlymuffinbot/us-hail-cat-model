@@ -206,6 +206,36 @@ def process_tif(src_path, dst_path, correction):
             if tags:
                 dst.update_tags(b, **tags)
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    import random
+    import sys
+    errors = []
+
+    if not OUT_DIR.exists():
+        errors.append(f"Missing directory: {OUT_DIR}")
+    else:
+        tifs = list(OUT_DIR.rglob("hail_????????.tif"))
+        if len(tifs) <= 2000:
+            errors.append(f"Too few TIFFs: {len(tifs)} (expected >2000)")
+        else:
+            sample = random.sample(tifs, min(10, len(tifs)))
+            for p in sample:
+                try:
+                    with rasterio.open(p) as src:
+                        src.read(1)
+                except Exception as e:
+                    errors.append(f"Cannot read {p.name}: {e}")
+
+    if errors:
+        log("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            log(f"  ✗ {e}")
+        return False
+    log("Output validation passed ✓")
+    return True
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     log(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Hail population debiasing started")
@@ -270,5 +300,17 @@ def main():
     log(f"  Skipped:  {skipped:,}")
     log(f"  Errors:   {errors:,}")
 
+    if not validate_outputs():
+        import sys
+        sys.exit(1)
+
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--validate", action="store_true")
+    args = parser.parse_args()
+    if args.validate:
+        import sys
+        ok = validate_outputs()
+        sys.exit(0 if ok else 1)
     main()

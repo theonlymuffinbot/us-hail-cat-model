@@ -65,6 +65,42 @@ def log(msg):
     print(f"[{ts}] {msg}")
     LOG.append(f"[{ts}] {msg}")
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    errors = []
+    root = DATA_ROOT / "hail_0.25deg"
+    rp_fnames = ["rp_10yr_hail.tif", "rp_25yr_hail.tif", "rp_50yr_hail.tif",
+                 "rp_100yr_hail.tif", "rp_200yr_hail.tif", "rp_250yr_hail.tif",
+                 "rp_500yr_hail.tif", "p_occurrence.tif"]
+
+    for fname in rp_fnames:
+        p = root / fname
+        if not p.exists():
+            errors.append(f"Missing: {fname}")
+        elif p.stat().st_size == 0:
+            errors.append(f"Empty: {fname}")
+        else:
+            try:
+                with rasterio.open(p) as src:
+                    src.read(1)
+            except Exception as e:
+                errors.append(f"Cannot read {fname}: {e}")
+
+    if errors:
+        log("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            log(f"  ✗ {e}")
+        return False
+    log("Output validation passed ✓")
+    return True
+
+
+# ── --validate early exit ──────────────────────────────────────────────────────
+import sys as _sys
+if "--validate" in _sys.argv:
+    ok = validate_outputs()
+    _sys.exit(0 if ok else 1)
+
 log("="*60)
 log("SPATIAL-POOLED CDF REBUILD")
 log("="*60)
@@ -357,3 +393,7 @@ log(f"{'='*60}")
 LOGS_ROOT.mkdir(parents=True, exist_ok=True)
 with open(LOGS_ROOT / "smooth_cdf.log", "w") as f:
     f.write("\n".join(LOG))
+
+if not validate_outputs():
+    import sys
+    sys.exit(1)

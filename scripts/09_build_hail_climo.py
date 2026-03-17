@@ -38,6 +38,35 @@ RESOLUTIONS = [
 ]
 
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    import rasterio as _rio
+    import sys
+    errors = []
+    out_dir = Path(RESOLUTIONS[0]['out_dir'])
+
+    if not out_dir.exists():
+        errors.append(f"Missing directory: {out_dir}")
+    else:
+        tifs = list(out_dir.glob("climo_????.tif"))
+        if len(tifs) != 366:
+            errors.append(f"Expected 366 climo TIFFs, found {len(tifs)}")
+        for p in tifs:
+            try:
+                with _rio.open(p) as src:
+                    src.read(1)
+            except Exception as e:
+                errors.append(f"Corrupt TIFF {p.name}: {e}")
+
+    if errors:
+        print("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            print(f"  ✗ {e}")
+        return False
+    print("Output validation passed ✓")
+    return True
+
+
 def build_file_index(in_dir):
     """
     Returns dict: {(year, 'MMDD'): filepath}
@@ -164,6 +193,16 @@ def process_resolution(label, in_dir, out_dir):
 
 
 if __name__ == '__main__':
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--validate", action="store_true")
+    args = parser.parse_args()
+    if args.validate:
+        ok = validate_outputs()
+        sys.exit(0 if ok else 1)
     for res in RESOLUTIONS:
         process_resolution(**res)
     print("\nAll done.")
+    if not validate_outputs():
+        sys.exit(1)

@@ -244,6 +244,36 @@ def regression_adjust(raw_series: dict, pop_series: dict):
         adjusted = {yr: v / ref_val for yr, v in adjusted.items()}
     return round(beta, 4), adjusted
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    import csv as _csv
+    import sys
+    errors = []
+
+    for fname in ["county_storm_counts.csv", "national_storm_trends.csv", "county_storm_normalized.csv"]:
+        p = OUT_DIR / fname
+        if not p.exists():
+            errors.append(f"Missing: {fname}")
+        elif p.stat().st_size == 0:
+            errors.append(f"Empty: {fname}")
+        else:
+            try:
+                with open(p, newline="") as f:
+                    rows = list(_csv.DictReader(f))
+                if len(rows) <= 10:
+                    errors.append(f"Too few rows in {fname}: {len(rows)} (expected >10)")
+            except Exception as e:
+                errors.append(f"Cannot read {fname}: {e}")
+
+    if errors:
+        log("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            log(f"  ✗ {e}")
+        return False
+    log("Output validation passed ✓")
+    return True
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     log(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Building storm trend files")
@@ -394,5 +424,17 @@ def main():
     log(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Done!")
     log(f"  Output dir: {OUT_DIR}")
 
+    if not validate_outputs():
+        import sys
+        sys.exit(1)
+
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--validate", action="store_true")
+    args = parser.parse_args()
+    if args.validate:
+        import sys
+        ok = validate_outputs()
+        sys.exit(0 if ok else 1)
     main()

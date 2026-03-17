@@ -146,6 +146,35 @@ def fit_local_beta(neighbourhood: set, counts: dict, pop: dict) -> float:
     # Clamp to a sensible range
     return max(0.1, min(beta, 5.0))
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    import csv as _csv
+    import sys
+    errors = []
+
+    for p in [OUT_BETA, OUT_MAIN]:
+        if not p.exists():
+            errors.append(f"Missing: {p.name}")
+        elif p.stat().st_size == 0:
+            errors.append(f"Empty: {p.name}")
+        else:
+            try:
+                with open(p, newline="") as f:
+                    rows = list(_csv.DictReader(f))
+                if len(rows) <= 100:
+                    errors.append(f"Too few rows in {p.name}: {len(rows)} (expected >100)")
+            except Exception as e:
+                errors.append(f"Cannot read {p.name}: {e}")
+
+    if errors:
+        log("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            log(f"  ✗ {e}")
+        return False
+    log("Output validation passed ✓")
+    return True
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     log(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Building spatial beta normalisations")
@@ -255,5 +284,17 @@ def main():
 
     log(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Done!")
 
+    if not validate_outputs():
+        import sys
+        sys.exit(1)
+
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--validate", action="store_true")
+    args = parser.parse_args()
+    if args.validate:
+        import sys
+        ok = validate_outputs()
+        sys.exit(0 if ok else 1)
     main()

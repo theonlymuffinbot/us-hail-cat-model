@@ -73,6 +73,38 @@ def make_profile(factor, n_bands):
     }
 
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass.
+    Stage 08 does a FULL scan of all TIFFs — any corrupt file is a failure.
+    """
+    import sys
+    errors = []
+    out_dir = DATA_ROOT / "hail_0.25deg"
+
+    if not out_dir.exists():
+        errors.append(f"Missing directory: {out_dir}")
+    else:
+        tifs = sorted(out_dir.rglob("hail_????????.tif"))
+        if len(tifs) == 0:
+            errors.append(f"No TIFFs found in {out_dir}")
+        else:
+            log(f"Scanning all {len(tifs):,} TIFFs for corruption...")
+            for p in tifs:
+                try:
+                    with rasterio.open(p) as src:
+                        src.read(1)
+                except Exception as e:
+                    errors.append(f"Corrupt TIFF: {p}: {e}")
+
+    if errors:
+        log("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            log(f"  ✗ {e}")
+        return False
+    log("Output validation passed ✓")
+    return True
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     tifs = sorted(SRC_DIR.rglob("hail_????????.tif"))
@@ -140,6 +172,18 @@ def main():
         log(f"  {r}: written={d:,}  skipped={skip[r]:,}")
     log(f"  Errors: {errors}")
 
+    if not validate_outputs():
+        import sys
+        sys.exit(1)
+
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--validate", action="store_true")
+    args = parser.parse_args()
+    if args.validate:
+        import sys
+        ok = validate_outputs()
+        sys.exit(0 if ok else 1)
     main()

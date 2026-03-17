@@ -36,6 +36,41 @@ THRESHOLDS = [0.25, 0.50, 1.50, 2.00, 3.00, 4.00, 5.00]
 YEARS      = list(range(2004, 2026))   # 2004-2025 complete years
 N_YEARS    = len(YEARS)
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    import sys
+    errors = []
+    root = DATA_ROOT / "hail_0.25deg"
+    expected = [f"p_occ_{t:.2f}in.tif".replace(".", "p") for t in THRESHOLDS]
+
+    for fname in expected:
+        p = root / fname
+        if not p.exists():
+            errors.append(f"Missing: {fname}")
+        elif p.stat().st_size == 0:
+            errors.append(f"Empty: {fname}")
+        else:
+            try:
+                with rasterio.open(p) as src:
+                    src.read(1)
+            except Exception as e:
+                errors.append(f"Cannot read {fname}: {e}")
+
+    if errors:
+        print("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            print(f"  ✗ {e}")
+        return False
+    print("Output validation passed ✓")
+    return True
+
+
+# ── --validate early exit ──────────────────────────────────────────────────────
+import sys as _sys
+if "--validate" in _sys.argv:
+    ok = validate_outputs()
+    _sys.exit(0 if ok else 1)
+
 t0 = time.time()
 print("="*60)
 print("OCCURRENCE PROBABILITY RASTERS")
@@ -105,8 +140,13 @@ for thresh in THRESHOLDS:
 
 print(f"\nDone in {time.time()-t0:.1f}s")
 print(f"\nOutputs in {ROOT}/:")
+# end of per-threshold loop output listing follows
 for thresh in THRESHOLDS:
     fname = f"p_occ_{thresh:.2f}in.tif".replace(".", "p")
     path  = os.path.join(ROOT, fname)
     size  = os.path.getsize(path)
     print(f"  {fname}  ({size/1024:.0f} KB)")
+
+if not validate_outputs():
+    import sys
+    sys.exit(1)

@@ -182,6 +182,34 @@ def fit_trend(data_years: np.ndarray, data_pops: np.ndarray) -> np.ndarray:
     trend = np.exp(X_pred @ coef)
     return trend
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    import csv as _csv
+    import sys
+    errors = []
+
+    if not OUT_CSV.exists():
+        errors.append(f"Missing: {OUT_CSV}")
+    elif OUT_CSV.stat().st_size == 0:
+        errors.append(f"Empty: {OUT_CSV}")
+    else:
+        try:
+            with open(OUT_CSV, newline="") as f:
+                rows = list(_csv.DictReader(f))
+            if len(rows) <= 100:
+                errors.append(f"Too few rows: {len(rows)} (expected >100)")
+        except Exception as e:
+            errors.append(f"Cannot read CSV: {e}")
+
+    if errors:
+        log("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            log(f"  ✗ {e}")
+        return False
+    log("Output validation passed ✓")
+    return True
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     log(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Building county population trend")
@@ -280,5 +308,17 @@ def main():
     log(f"  Total rows:  {len(rows):,}")
     log(f"  Output:      {OUT_CSV}")
 
+    if not validate_outputs():
+        import sys
+        sys.exit(1)
+
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--validate", action="store_true")
+    args = parser.parse_args()
+    if args.validate:
+        import sys
+        ok = validate_outputs()
+        sys.exit(0 if ok else 1)
     main()

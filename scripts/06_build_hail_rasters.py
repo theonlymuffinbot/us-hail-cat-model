@@ -154,6 +154,37 @@ def spc_filename_to_date(stem):
     dy  = int(stem[4:6])
     return datetime(yr, mo, dy)
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    import random
+    import sys
+    errors = []
+
+    if not OUT_DIR.exists():
+        errors.append(f"Missing directory: {OUT_DIR}")
+    else:
+        tifs = list(OUT_DIR.rglob("hail_????????.tif"))
+        if len(tifs) <= 4000:
+            errors.append(f"Too few TIFFs: {len(tifs)} (expected >4000)")
+        else:
+            sample = random.sample(tifs, min(10, len(tifs)))
+            for p in sample:
+                try:
+                    import rasterio as _rio
+                    with _rio.open(p) as src:
+                        src.read(1)
+                except Exception as e:
+                    errors.append(f"Cannot read {p.name}: {e}")
+
+    if errors:
+        log("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            log(f"  ✗ {e}")
+        return False
+    log("Output validation passed ✓")
+    return True
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 def main():
     if not HAVE_RASTERIO:
@@ -213,5 +244,15 @@ def main():
     log(f"    CRS: {CRS}")
     log(f"    Bands: {N_BINS} (band N = size {BIN_STEP}x(N-1) to {BIN_STEP}xN-1 hundredths/inch)")
 
+    if not validate_outputs():
+        sys.exit(1)
+
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--validate", action="store_true")
+    args = parser.parse_args()
+    if args.validate:
+        ok = validate_outputs()
+        sys.exit(0 if ok else 1)
     main()

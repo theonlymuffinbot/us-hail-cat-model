@@ -51,6 +51,42 @@ CS         = 0.25
 NODATA     = -9999.0
 KM_LAT     = 111.0
 
+def validate_outputs() -> bool:
+    """Validate all outputs produced by this stage. Returns True if all pass."""
+    errors = []
+    out_d = STOCH / "maps"
+    rp_fnames = [f"stoch_rp_{rp}yr_hail.tif" for rp in RP_YRS]
+    pocc_fnames = [f"stoch_p_occ_{f'{t:.2f}'.replace('.','p')}in.tif" for t in POCC_T]
+    expected = rp_fnames + ["stoch_p_occurrence.tif"] + pocc_fnames
+
+    for fname in expected:
+        p = out_d / fname
+        if not p.exists():
+            errors.append(f"Missing: {fname}")
+        elif p.stat().st_size == 0:
+            errors.append(f"Empty: {fname}")
+        else:
+            try:
+                with rasterio.open(p) as src:
+                    src.read(1)
+            except Exception as e:
+                errors.append(f"Cannot read {fname}: {e}")
+
+    if errors:
+        print("CRITICAL: Output validation FAILED:")
+        for e in errors:
+            print(f"  ✗ {e}")
+        return False
+    print("Output validation passed ✓")
+    return True
+
+
+# ── --validate early exit ──────────────────────────────────────────────────────
+import sys as _sys
+if "--validate" in _sys.argv:
+    ok = validate_outputs()
+    _sys.exit(0 if ok else 1)
+
 def write_tif(arr, path):
     tr = from_bounds(LON_MIN-CS/2, LAT_MIN-CS/2, LON_MAX+CS/2, LAT_MAX+CS/2, NCOLS, NROWS)
     with rasterio.open(path, "w", driver="GTiff", dtype="float32",
@@ -322,3 +358,7 @@ compare(poc_any,  HIST/"p_occurrence.tif",
         PCMAP, PROB_LEV, OUT_F/"stoch_vs_hist_p_occurrence_comparison.png", "Annual Probability")
 
 print(f"\n=== Done: {len(list(OUT_D.glob('*.tif')))} TIFs, {len(list(OUT_F.glob('*.png')))} PNGs ===")
+
+if not validate_outputs():
+    import sys
+    sys.exit(1)
