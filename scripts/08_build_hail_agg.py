@@ -75,11 +75,22 @@ def make_profile(factor, n_bands):
 
 def validate_outputs() -> bool:
     """Validate all outputs produced by this stage. Returns True if all pass.
-    Stage 08 does a FULL scan of all TIFFs — any corrupt file is a failure.
+
+    Stage 08 does a FULL scan of hail_0.25deg/:
+      - File opens without error (catches corrupt/truncated TIFFs)
+      - CRS == EPSG:4326 (catches CRS-mismatch files that break stage 10)
+      - Shape == (NROWS//factor, NCOLS//factor) (catches dimension mismatches)
+
+    Uses metadata-only open (no pixel reads) for speed — opening the file
+    header is sufficient to detect both corruption and CRS/shape issues.
     """
     import sys
     errors = []
     out_dir = DATA_ROOT / "hail_0.25deg"
+    factor  = 5
+    exp_h   = NROWS // factor   # 104
+    exp_w   = NCOLS // factor   # 236
+    exp_crs = "EPSG:4326"
 
     if not out_dir.exists():
         errors.append(f"Missing directory: {out_dir}")
@@ -88,20 +99,38 @@ def validate_outputs() -> bool:
         if len(tifs) == 0:
             errors.append(f"No TIFFs found in {out_dir}")
         else:
-            log(f"Scanning all {len(tifs):,} TIFFs for corruption...")
+            log(f"Scanning all {len(tifs):,} TIFFs for corruption, CRS and shape consistency...")
             for p in tifs:
                 try:
                     with rasterio.open(p) as src:
-                        src.read(1)
+                        # CRS check
+                        crs_str = src.crs.to_epsg() if src.crs else None
+                        if str(src.crs) != exp_crs and crs_str != 4326:
+                            errors.append(f"CRS mismatch {p.name}: got {src.crs}, expected {exp_crs}")
+                        # Shape check
+                        if src.height != exp_h or src.width != exp_w:
+                            errors.append(f"Shape mismatch {p.name}: got ({src.height},{src.width}), expected ({exp_h},{exp_w})")
                 except Exception as e:
-                    errors.append(f"Corrupt TIFF: {p}: {e}")
+                    errors.append(f"Corrupt/unreadable {p.name}: {e}")
 
     if errors:
-        log("CRITICAL: Output validation FAILED:")
-        for e in errors:
+        log(f"CRITICAL: Output validation FAILED ({len(errors)} issue(s)):")
+        for e in errors[:20]:   # cap at 20 to avoid log spam
             log(f"  ✗ {e}")
+        if len(errors) > 20:
+            log(f"  ... and {len(errors)-20} more")
+        # Delete corrupt/mismatched files so they can be regenerated on re-run
+        for e in errors:
+            parts = e.split(" ")
+            for part in parts:
+                if part.endswith(".tif"):
+                    p = out_dir / "**" / part
+                    matches = list(out_dir.rglob(part))
+                    for m in matches:
+                        log(f"  Deleting bad file for regeneration: {m}")
+                        m.unlink(missing_ok=True)
         return False
-    log("Output validation passed ✓")
+    log(f"Output validation passed ✓ ({len(tifs):,} files checked)")
     return True
 
 

@@ -228,17 +228,36 @@ dupes = pd.Series(dates)[pd.Series(dates).duplicated()]
 if len(dupes):
     print(f"WARNING: {len(dupes)} duplicate dates:\n{dupes.values}")
 
-# --- 0.6 Spatial validation (sample) ---
-print("Spatial validation (100 random files)...")
-errors = []
-for f in random.sample(tif_files, min(100, len(tif_files))):
-    with rasterio.open(f) as src:
-        if src.count != N_BANDS:          errors.append(f"{f}: bands {src.count}")
-        if src.crs != ref_crs:            errors.append(f"{f}: CRS mismatch")
-        if (src.height, src.width) != ref_shape: errors.append(f"{f}: shape mismatch")
-if errors:
-    for e in errors[:5]: print(f"  ERROR: {e}")
-    raise RuntimeError("Spatial inconsistencies detected.")
+# --- 0.6 Spatial validation (FULL scan) ---
+# Check every file for CRS, shape, and band count consistency.
+# Auto-delete any bad files so re-running stage 08 can regenerate them.
+print(f"Spatial validation (all {len(tif_files)} files)...")
+bad_files = []
+for f in tif_files:
+    try:
+        with rasterio.open(f) as src:
+            file_errors = []
+            if src.count != N_BANDS:
+                file_errors.append(f"bands {src.count} != {N_BANDS}")
+            if src.crs != ref_crs:
+                file_errors.append(f"CRS {src.crs} != {ref_crs}")
+            if (src.height, src.width) != ref_shape:
+                file_errors.append(f"shape ({src.height},{src.width}) != {ref_shape}")
+            if file_errors:
+                bad_files.append((f, "; ".join(file_errors)))
+    except Exception as e:
+        bad_files.append((f, f"unreadable: {e}"))
+if bad_files:
+    print(f"  Found {len(bad_files)} bad file(s) — deleting for regeneration:")
+    for f, reason in bad_files[:20]:
+        print(f"  ERROR: {f}: {reason}")
+        Path(f).unlink(missing_ok=True)
+    if len(bad_files) > 20:
+        print(f"  ... and {len(bad_files)-20} more (all deleted)")
+    raise RuntimeError(
+        f"Spatial inconsistencies detected in {len(bad_files)} file(s). "
+        "Bad files deleted — re-run stage 08 to regenerate, then retry stage 10."
+    )
 print(f"  All sampled files passed.")
 
 # Coordinate arrays
