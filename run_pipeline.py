@@ -15,11 +15,41 @@ Usage:
 """
 
 import argparse
+import importlib
 import subprocess
 import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# ── dependency preflight ──────────────────────────────────────────────────────
+REQUIRED_PACKAGES = [
+    ("numpy",       "numpy"),
+    ("pandas",      "pandas"),
+    ("scipy",       "scipy"),
+    ("rasterio",    "rasterio"),
+    ("xarray",      "xarray"),
+    ("regionmask",  "regionmask"),
+    ("lmoments3",   "lmoments3"),
+    ("pyarrow",     "pyarrow"),
+    ("matplotlib",  "matplotlib"),
+    ("cartopy",     "cartopy"),
+]
+
+def check_dependencies() -> bool:
+    """Check all required packages are importable. Print missing ones and return False if any."""
+    missing = []
+    for pip_name, import_name in REQUIRED_PACKAGES:
+        try:
+            importlib.import_module(import_name)
+        except ImportError:
+            missing.append(pip_name)
+    if missing:
+        print(f"\033[91m✗ Missing required packages: {', '.join(missing)}\033[0m")
+        print(f"  Run: pip install {' '.join(missing)}")
+        print(f"  Or:  pip install -r requirements.txt\n")
+        return False
+    return True
 
 REPO_ROOT = Path(__file__).resolve().parent
 SCRIPTS   = REPO_ROOT / "scripts"
@@ -150,6 +180,11 @@ def main():
     parser.add_argument("--validate", dest="validate_only", action="store_true",
                         help="Run each stage with --validate (skip computation, check outputs only)")
     args = parser.parse_args()
+
+    # Preflight: check all dependencies are installed (skip for dry-run)
+    if not args.dry_run:
+        if not check_dependencies():
+            sys.exit(1)
 
     skip = set()
     if args.skip_stages:
