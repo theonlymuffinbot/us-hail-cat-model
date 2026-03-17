@@ -57,44 +57,33 @@ cd hail-model
 ### 2. Install dependencies
 
 ```bash
-pip install numpy pandas scipy rasterio xarray regionmask lmoments3 pyarrow matplotlib
+pip install -r requirements.txt
 ```
 
 Python 3.9+ required.
 
-### 3. Run the pipeline (Steps 1–14 in order)
+### 3. Run the pipeline
 
 ```bash
-# Steps 1–5: Population normalization pipeline (~10 min total)
-python scripts/01_download_population.py
-python scripts/02_build_population_trend.py
-python scripts/03_download_spc.py
-python scripts/04_build_storm_trends.py
-python scripts/05_build_spatial_beta.py
-
-# Steps 6–13: Hail raster pipeline (~3.5 hrs total)
-python scripts/06_build_hail_rasters.py
-python scripts/07_build_hail_debias.py
-python scripts/08_build_hail_agg.py
-python scripts/09_build_hail_climo.py
-python scripts/10_hail_catmodel_pipeline.py
-python scripts/11_build_smooth_cdf.py
-python scripts/12_build_occurrence_probs.py
-python scripts/13_apply_conus_mask.py
-
-# Step 14: Stochastic catalog (~2.5 hrs)
-python scripts/14_generate_stochastic_catalog.py
-
-# Step 15: Per-cell stochastic maps (~15 min)
-python scripts/15_stochastic_maps.py
-
-# Optional: render historical figures
-python scripts/render_maps.py
-python scripts/render_spatial_corr.py
-python scripts/test_lambda_comparison.py
+python run_pipeline.py
 ```
 
-Steps 3, 6, 7, 8 are re-runnable — they skip existing files.
+That's it. All 15 stages run in order (~6–7 hours total). Progress and timing are printed for each stage. If a stage fails, the pipeline stops and tells you exactly how to resume:
+
+```bash
+python run_pipeline.py --from 7   # resume from stage 7
+python run_pipeline.py --only 10  # re-run a single stage
+python run_pipeline.py --dry-run  # preview what will run
+```
+
+**Optional:** render historical figures after the pipeline completes:
+
+```bash
+python scripts/render_maps.py
+python scripts/render_spatial_corr.py
+```
+
+> **Note:** Stages 3, 6, 7, and 8 skip existing files and are safe to re-run.
 
 ---
 
