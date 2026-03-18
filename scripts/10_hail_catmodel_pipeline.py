@@ -337,78 +337,119 @@ hail_da = hail_da.load()
 print(f"Step 1 complete — {elapsed()}")
 
 # ═══════════════════════════════════════════════════════════════
-# STEP 2 — Multi-day storm event identification
+# STEP 2 — Synoptic-system event identification
 # ═══════════════════════════════════════════════════════════════
+#
+# Grouping rule (Doswell et al. 2005; NOAA SPC outbreak conventions):
+#   Two consecutive active days belong to the same event if ALL hold:
+#   1. Temporal gap ≤ 1 day (consecutive days or one quiet day between them)
+#   2. Spatial overlap: day-1 footprint dilated by 3 cells (~83km at 0.25°)
+#      overlaps with day-2 footprint
+#   Hard cap: events longer than 5 calendar days are forcibly split.
 
 print("\n" + "="*60)
-print("STEP 2 — Event identification")
+print("STEP 2 — Event identification (synoptic-system grouping)")
 print("="*60)
 
 DAMAGE_THRESHOLD_IN = 1.0  # residential asphalt shingles
+BUFFER_CELLS        = 3    # ~83 km at 0.25° resolution
+MAX_DURATION_DAYS   = 5    # hard cap per AIR/RMS event definition conventions
 
-# 2.2 Temporal clustering
-daily_any_hail = (hail_da >= DAMAGE_THRESHOLD_IN).any(dim=["lat", "lon"]).values
+# 2.1 Active days (any CONUS cell >= damage threshold)
+hail_vals      = hail_da.values                                  # (n_times, nrows, ncols), float32
+daily_any_hail = (hail_vals >= DAMAGE_THRESHOLD_IN).any(axis=(1, 2))  # (n_times,)
+active_t_idx   = np.where(daily_any_hail)[0]                    # time indices of hail days
+print(f"  Active hail days (any cell >= {DAMAGE_THRESHOLD_IN}\"): {len(active_t_idx)}")
 
-event_windows = []
-in_event, start_idx = False, None
-for i, active in enumerate(daily_any_hail):
-    if active and not in_event:
-        in_event, start_idx = True, i
-    elif not active and in_event:
-        in_event = False
-        event_windows.append((start_idx, i - 1))
-if in_event:
-    event_windows.append((start_idx, len(daily_any_hail) - 1))
+# Pre-compute lat/lon grids for centroid calculation
+lat_grid, lon_grid = np.meshgrid(lats, lons, indexing="ij")     # (nrows, ncols)
 
-print(f"  Candidate temporal windows:  {len(event_windows)}")
-if event_windows:
-    durations = [e - s + 1 for s, e in event_windows]
-    print(f"  Max window duration (days):  {max(durations)}")
+# 2.2 Group active days into candidate events
+#     Two active days merge if temporal gap ≤ 2 calendar days AND footprints overlap
+#     (gap=1 → consecutive, gap=2 → one quiet day between them)
+def footprints_overlap_3cell(fp1, fp2, buf=BUFFER_CELLS):
+    return bool(np.any(binary_dilation(fp1, iterations=buf) & fp2))
 
-# 2.3 Spatial continuity — split disconnected windows
-def footprints_overlap(fp1, fp2, buffer_cells=2):
-    return np.any(binary_dilation(fp1, iterations=buffer_cells) & fp2)
+event_groups = []   # list of lists of time indices
+if len(active_t_idx) > 0:
+    current_group = [active_t_idx[0]]
+    for k in range(1, len(active_t_idx)):
+        prev_t = active_t_idx[k - 1]
+        curr_t = active_t_idx[k]
+        gap    = (dates[curr_t] - dates[prev_t]).days  # 1=consecutive, 2=one quiet day
+        if gap <= 2:
+            fp_prev = hail_vals[prev_t] >= DAMAGE_THRESHOLD_IN
+            fp_curr = hail_vals[curr_t] >= DAMAGE_THRESHOLD_IN
+            if footprints_overlap_3cell(fp_prev, fp_curr):
+                current_group.append(curr_t)
+                continue
+        event_groups.append(current_group)
+        current_group = [curr_t]
+    event_groups.append(current_group)
 
-def split_event_window(start, end, hail_da, threshold, buffer_cells=2):
-    sub_events, current_start = [], start
-    for i in range(start, end):
-        fp_today    = (hail_da.isel(time=i).values   >= threshold)
-        fp_tomorrow = (hail_da.isel(time=i+1).values >= threshold)
-        if not footprints_overlap(fp_today, fp_tomorrow, buffer_cells):
-            sub_events.append((current_start, i))
-            current_start = i + 1
-    sub_events.append((current_start, end))
-    return sub_events
+print(f"  Candidate events (before duration cap): {len(event_groups)}")
 
-print("  Applying spatial continuity check...")
-final_events = []
-for start, end in event_windows:
-    if start == end:
-        final_events.append((start, end))
-    else:
-        final_events.extend(split_event_window(start, end, hail_da, DAMAGE_THRESHOLD_IN))
+# 2.3 Apply 5-day hard duration cap
+def split_by_duration(group):
+    """Split a group so no sub-group spans more than MAX_DURATION_DAYS calendar days."""
+    if len(group) <= 1:
+        return [group]
+    sub_groups, current_sub = [], [group[0]]
+    sub_start_date = dates[group[0]]
+    for t_idx in group[1:]:
+        if (dates[t_idx] - sub_start_date).days < MAX_DURATION_DAYS:
+            current_sub.append(t_idx)
+        else:
+            sub_groups.append(current_sub)
+            current_sub    = [t_idx]
+            sub_start_date = dates[t_idx]
+    sub_groups.append(current_sub)
+    return sub_groups
 
-print(f"  Final events after spatial splitting: {len(final_events)}")
+final_event_groups = []
+for grp in event_groups:
+    final_event_groups.extend(split_by_duration(grp))
+
+print(f"  Final events (after {MAX_DURATION_DAYS}-day cap): {len(final_event_groups)}")
 
 # 2.4 Build event catalog
 event_peak_hail, event_records = [], []
 
-for event_id, (s, e) in enumerate(final_events):
-    peak      = hail_da.isel(time=slice(s, e + 1)).max(dim="time").values
+for event_id, group in enumerate(final_event_groups):
+    # Peak hail = max across all days in event (float32, shape nrows×ncols)
+    peak      = hail_vals[group].max(axis=0) if len(group) > 1 else hail_vals[group[0]].copy()
     footprint = peak >= DAMAGE_THRESHOLD_IN
     n_cells   = int(footprint.sum())
     if n_cells == 0:
         continue
+
+    # Footprint-weighted centroid
+    weights = peak * footprint          # zero outside footprint
+    total_w = float(weights.sum())
+    if total_w > 0:
+        centroid_lat = float((lat_grid * weights).sum() / total_w)
+        centroid_lon = float((lon_grid * weights).sum() / total_w)
+    else:
+        r_idx, c_idx = np.where(footprint)
+        centroid_lat = float(lats[r_idx].mean())
+        centroid_lon = float(lons[c_idx].mean())
+
+    start_date_val = dates[group[0]]
+    end_date_val   = dates[group[-1]]
+    duration       = (end_date_val - start_date_val).days + 1
+
     event_peak_hail.append(peak)
     event_records.append({
         "event_id":           event_id,
-        "start_date":         dates[s],
-        "end_date":           dates[e],
-        "duration_days":      e - s + 1,
+        "start_date":         start_date_val,
+        "end_date":           end_date_val,
+        "duration_days":      duration,
         "n_active_cells":     n_cells,
-        "footprint_area_km2": n_cells * (0.25 * 111) ** 2,
-        "peak_hail_max_in":   float(peak.max()),
+        "footprint_area_km2": n_cells * 770.06,
+        "peak_hail_max_in":   float(peak[footprint].max()),
         "peak_hail_mean_in":  float(peak[footprint].mean()),
+        "centroid_lat":       round(centroid_lat, 3),
+        "centroid_lon":       round(centroid_lon, 3),
     })
 
 event_df         = pd.DataFrame(event_records)
@@ -416,15 +457,27 @@ event_peak_array = np.stack(event_peak_hail, axis=0)  # (n_events, nrows, ncols)
 
 event_df.to_csv(os.path.join(ROOT, "event_catalog.csv"), index=False)
 np.save(os.path.join(ROOT, "event_peak_array.npy"), event_peak_array)
-print(f"\n  Event catalog: {len(event_df)} events over {event_df['start_date'].dt.year.nunique()} years")
-print(event_df[["start_date","end_date","duration_days","n_active_cells","peak_hail_max_in"]].describe().to_string())
 
-# 2.5 Quality checks
-print("\n  Event duration distribution:")
+# 2.5 Summary statistics (new vs. old approach)
+print(f"\n  ── New event catalog summary ──────────────────────────")
+print(f"  Events:  {len(event_df):,}  (previous approach: ~2,928)")
+print(f"  Years:   {event_df['start_date'].dt.year.nunique()}")
+print(f"\n  Duration (days):")
+dur = event_df["duration_days"]
+print(f"    mean={dur.mean():.1f}  median={dur.median():.0f}  max={dur.max()}")
+print(f"\n  Footprint area (km²):")
+fp = event_df["footprint_area_km2"]
+print(f"    mean={fp.mean():,.0f}  median={fp.median():,.0f}  max={fp.max():,.0f}")
+print(f"\n  Peak hail (in):")
+ph = event_df["peak_hail_max_in"]
+print(f"    mean={ph.mean():.2f}  max={ph.max():.2f}")
+print(f"\n  Event duration distribution:")
 print(event_df["duration_days"].value_counts().sort_index().to_string())
-print("\n  Annual event counts:")
+print(f"\n  Annual event counts:")
 print(event_df.groupby(event_df["start_date"].dt.year).size().to_string())
+
 assert event_df["peak_hail_max_in"].max() < 10.5, "Implausible peak hail — check bins"
+assert dur.max() <= MAX_DURATION_DAYS, f"Duration cap violated: max={dur.max()}"
 print(f"\nStep 2 complete — {elapsed()}")
 
 # ═══════════════════════════════════════════════════════════════

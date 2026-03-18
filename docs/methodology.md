@@ -351,7 +351,17 @@ The result is a "climatological count" raster for each calendar day — a 29-ban
 
 **How it works:**
 
-**Part A — Event identification:** The model defines a "hail event" as a connected cluster of days and grid cells with damaging hail (≥ 1.0 inch). The pipeline first identifies all days where any CONUS cell exceeds the 1.0-inch threshold, then groups consecutive such days into temporal windows. Within each window, it checks whether the hail footprints of successive days spatially overlap (using binary dilation with a 2-cell buffer, about 56 km). If two days' footprints are completely disconnected in space — for example, simultaneous unrelated storms in Kansas and Georgia — they are split into separate events. This process converts 107 candidate temporal windows into 2,928 distinct events.
+**Part A — Event identification (synoptic-system grouping):** The model defines a "hail event" as a cluster of active hail days sharing a common synoptic-scale weather system. Two consecutive active days (days where any CONUS cell exceeds the 1.0-inch damage threshold) are grouped into the same event if ALL of the following hold:
+
+1. **Temporal gap ≤ 1 day** — the two days are either consecutive or separated by exactly one quiet day. This matches how NOAA SPC defines "outbreak periods" (Doswell et al. 2005): the same synoptic system can produce hail on day 1, be quiet on day 2 as it reorganizes, then produce more hail on day 3.
+
+2. **Spatial overlap** — the day-1 footprint, dilated by 3 grid cells (~83 km at 0.25° resolution), overlaps with the day-2 footprint. If two simultaneous active days occur in completely different parts of CONUS — for example, an unrelated storm in Kansas and another in Georgia — they are separate events even if on consecutive calendar days. This matches AIR/RMS event definition conventions for multi-peril storms.
+
+3. **Hard 5-day duration cap** — any chain of days exceeding 5 calendar days is forcibly split at the 5-day boundary. This prevents conflating multiple distinct synoptic systems that happen to produce hail on overlapping dates, consistent with industry-standard event definitions for cat model purposes.
+
+The spatial overlap buffer of 83 km (3 cells × 27.75 km/cell) is larger than the 2-cell (~56 km) buffer used in the previous version, reflecting typical synoptic-system migration speeds of 30–60 km per day over 1–2 day gaps. This produces a defensible, literature-consistent event catalog.
+
+The event catalog records, for each event: `event_id`, `start_date`, `end_date`, `duration_days`, `n_active_cells` (cells ≥ 1.0" across the whole event), `footprint_area_km2` (n_cells × 770.06 km²), `peak_hail_max_in`, `peak_hail_mean_in`, and `centroid_lat`/`centroid_lon` (footprint-weighted centroid of the peak hail field).
 
 **Part B — CDF fitting:** For each active grid cell (those with at least 5 years containing any hail), the pipeline builds an annual maximum series: for each of 23 years (2004–2026), what was the largest hail at this cell? It then fits a zero-inflated two-component model:
 
@@ -375,9 +385,11 @@ To find the hail size for a given return period: numerically invert F(h) using B
 
 **Part C — Spatial correlation:** Fits an exponential correlation model ρ(d) = exp(−d/λ) to empirical cell-pair correlations. Subsamples 800 active cells for computational tractability, computes Spearman rank correlations between all pairs (800 × 800 matrix), and fits λ by minimizing the squared difference between empirical and model correlations across distance bins. Three λ candidates tested (100, 150, 200 km) via Monte Carlo variance matching. Applies nearest positive-semidefinite correction if the correlation matrix is not numerically PSD. Computes Cholesky factor L such that L × L^T = Σ.
 
-**Key parameters:** Damage threshold 1.0 inch; GPD threshold 2.0 inches; 800 copula cells; λ = 200 km (CDF layer)
+**Key parameters:** Damage threshold 1.0 inch; GPD threshold 2.0 inches; spatial overlap buffer 3 cells (~83 km); max event duration 5 days; 800 copula cells
 
-**Outputs in `data/hail_0.25deg/`:** `char_hail_daily.nc`, `event_catalog.csv`, `event_peak_array.npy`, `p_occurrence.tif`, `rp_Tyr_hail.tif` (7 files), `bin_midpoints.json`, `lambda_km.json`, `cholesky_L.npy`, `corr_cell_idx.npy`
+**Outputs in `data/hail_0.25deg/`:** `char_hail_daily.nc`, `event_catalog.csv` (with centroid_lat/lon), `event_peak_array.npy`, `p_occurrence.tif`, `rp_Tyr_hail.tif` (7 files), `bin_midpoints.json`, `lambda_km.json`, `cholesky_L.npy`, `corr_cell_idx.npy`
+
+**References:** Doswell C.A., Brooks H.E., Kay M.P. (2005), "Climatological estimates of daily local nontornadic severe thunderstorm probability for the United States," *Weather and Forecasting*, 20(4), 577–595. NOAA SPC Outbreak Definitions: https://www.spc.noaa.gov/.
 
 ---
 
@@ -431,51 +443,73 @@ Also applies a second round of spatial smoothing to the p_occ rasters using the 
 
 ### Step 14: Stochastic Catalog Generation (`14_generate_stochastic_catalog.py`)
 
-**What it does:** Runs a 50,000-year simulation of CONUS hail activity, generating millions of synthetic storm events to build robust probability estimates at all return periods.
+**What it does:** Runs a 50,000-year simulation of CONUS hail activity using an **event-resampling (bootstrap)** approach, generating millions of synthetic storm events from the library of historical event footprints to build robust probability estimates at all return periods.
 
-**Why we need it:** With only 22 years of observations, return period estimates beyond ~50 years are highly uncertain. The GPD tail extrapolation is statistically grounded but relies on small samples. Simulating 50,000 years gives us thousands of "realizations" of rare events — enough to estimate the 10,000-year return period with reasonable confidence. It also enables aggregate loss analysis: summing damage across all events in a year to build an annual aggregate exceedance curve.
+**Why we need it:** With only 22 years of observations, return period estimates beyond ~50 years are highly uncertain. Simulating 50,000 years gives us thousands of "realizations" of rare events — enough to estimate the 10,000-year return period with reasonable confidence.
+
+**Why event-resampling instead of per-cell field generation (the previous approach):**
+
+The previous version (v2) generated hail fields from scratch using per-cell CDF lookups combined with a Gaussian copula (Cholesky decomposition). This is called a "field-based" approach. It was wrong in two ways:
+
+1. **Spatial geometry was synthetic.** The footprint shapes were purely emergent from the correlation structure of the copula. With a decorrelation length λ = 150 km fitted to sparse SPC point reports, the simulated footprints did not resemble real storm systems. Real events have coherent spatial structure determined by synoptic meteorology — a squall line, a supercell cluster, a broad stratiform precipitation shield — that a simple exponential copula cannot reproduce.
+
+2. **PET metrics were not insurance-relevant.** The previous `ann_occ_fp_km2` (worst footprint km² per year) and `ann_agg_fp_km2` (annual total footprint) are raw area metrics. Insurance cat models care about **occurrence intensity** (how bad was the worst event this year?) and **aggregate exposure** (how much total geographic exposure was hit during the year?). These are measured in hail intensity and cell counts, not raw area.
+
+The event-resampling approach preserves real spatial footprint geometry because each simulated event is a perturbed copy of a real historical event.
 
 **How it works:**
 
-*Pre-computation (done once, cached to disk):*
+*Pre-computation (done once):*
 
-1. Loads the Cholesky factor L (800×800, λ=150 km) and builds the per-cell CDF lookup table as a 2,000 × 12,811 float32 array. The 2,000 rows are quantile levels equally spaced from 0 to 1; the 12,811 columns are active grid cells. The value in row q, column c is the hail size (in inches) at quantile q for cell c, computed by inverting the lognormal + GPD CDF.
+1. Load `event_catalog.csv` and `event_peak_array.npy` — the full library of historical events (2,982+ events after the improved event definition in Step 10) with their complete spatial footprints stored as (n_events × 104 × 236) float32 arrays.
 
-2. **Important: 88 cells with GPD blowup.** For 88 cells, the GPD shape parameter ξ was positive enough that the fitted distribution predicted physically impossible hail sizes (millions of inches) at high quantiles. These cells were refitted using empirical quantiles only — the CDF table entries are the sorted historical observations, linearly interpolated. All values in the table are capped at 10 inches.
+2. Fit Poisson rate **λ = n_events / n_years_of_record** from the historical record.
 
-3. Assigns each of the 12,811 active cells to its nearest seed cell (from the 800 copula cells). Computes the correlation coefficient ρ = exp(−d/150 km) between each cell and its seed. Cells close to a seed cell are highly correlated with it; cells far from their nearest seed are nearly independent.
+3. Build a KDE-smoothed seasonal distribution of historical event dates (Gaussian, σ = 10 days, wrapped at year boundaries). This captures the strong warm-season peak in May–June.
 
-*Per simulated year:*
+*Per simulated year (50,000 years):*
 
-1. **Event count:** Draw N ~ Poisson(127.3). This matches the historical mean of 127 events per year. Some years get 110, some get 145, matching the year-to-year variability observed historically.
+1. **Event count:** Draw N ~ Poisson(λ).
 
 2. **For each of the N events:**
 
-   a. **Calendar date:** Draw a day-of-year from the smoothed historical event-date distribution. This is a kernel density estimate of the 2,928 historical event dates, smoothed with a 10-day bandwidth. The distribution has a strong peak in May–June and secondary peaks in other warm-season months.
+   a. **Calendar date:** Draw a day-of-year from the seasonal KDE distribution.
 
-   b. **Seasonal modulation:** Load the climatology raster for the drawn day-of-year. Compute each cell's seasonal occurrence probability p_occ_seasonal by normalizing the climatology value relative to its annual mean.
+   b. **Template selection:** Compute a seasonal weight for each historical event:
+      `weight = exp(−|historical_doy − drawn_doy| / 30)`
+      with day-of-year wrap-around at the year boundary. Draw one historical event proportional to these weights. This ensures that May events come from May templates, not August templates. The 30-day decay length allows reasonable spread while preserving seasonality.
 
-   c. **Correlated z-scores for seed cells:** Generate 800 independent standard normal values ε ~ N(0,I), then apply z_seed = L @ ε. This produces 800 correlated standard normal values, with the correlation structure encoded in L.
+   c. **Intensity perturbation:** Multiply all hail values in the selected event by a log-normal scaling factor `exp(σ × ε)`, where σ = 0.15 and ε ~ N(0,1). This adds realistic year-to-year intensity variability (+/- ~15% in log-space) while fully preserving the spatial structure and geometry of the template event. All values are clamped to [0, 10] inches.
 
-   d. **Extend to all 12,811 cells:** For each active cell with seed s and correlation ρ:
-      `z_cell = ρ × z_seed + √(1 − ρ²) × independent_noise`
-   This is the bivariate normal conditional simulation formula. Cells close to a seed cell (high ρ) are nearly as correlated as the seed; cells far away (low ρ) get mostly independent noise.
+   d. **Spatial translation (optional, disabled by default):** The event footprint can optionally be shifted by ±1–2 cells (±28–56 km) in lat/lon to add location uncertainty. This is disabled in the default configuration (`SPATIAL_TRANSLATE = False`) but implemented as a parameter.
 
-   e. **Apply zero-inflation:** Convert z_cell to a uniform via Φ(z_cell). Cells where the uniform < (1 − p_occ_seasonal) get hail = 0. This enforces the seasonal probability of occurrence at each cell.
+   e. **Count footprint:** Identify cells with perturbed hail ≥ 1.0 inch (the damage threshold). Record n_cells, max hail, mean hail, footprint km².
 
-   f. **Convert to hail size:** For non-zero cells, look up the hail size in the pre-computed CDF table by finding the row corresponding to the uniform value and reading the hail size for that cell's column.
-
-   g. **Threshold:** Retain only cells with hail ≥ 0.25 inches. Store event summary (n_cells, max_hail, mean_hail, p95_hail, footprint_km²) to the running CSV.
-
-3. Track annual maxima: worst occurrence event per year (by footprint), and annual aggregate totals.
+3. **Annual trackers:**
+   - `ann_occ_max_hail[year]` = maximum single-event peak hail intensity in the year
+   - `ann_occ_n_cells[year]` = n_cells of that max-intensity event
+   - `ann_agg_n_cells[year]` = sum of n_cells across ALL events in the year (total cell-events, i.e., total geographic exposure hit)
+   - `ann_agg_events[year]` = count of events in the year
 
 *Post-simulation:*
 
-Sort the 50,000 annual maxima arrays to read off the occurrence and aggregate PETs at standard return periods.
+Sort the 50,000 annual arrays to derive marginal PETs at standard return periods. PETs are "marginal" — each column is sorted independently — which is the standard industry presentation for occurrence and aggregate exceedance tables.
 
-**Key parameters:** N_SIM_YEARS = 50,000; LAMBDA_EVENTS = 127.3; LAMBDA_KM = 150; GPD_THRESH_IN = 2.0; N_QUANT = 2,000; RNG_SEED = 42; 6,367,856 events generated; runtime ~2.5 hours.
+**PET metric interpretation:**
 
-**Outputs in `data/stochastic/`:** `pet_occurrence.csv`, `pet_aggregate.csv`, `stochastic_event_summary.csv` (289 MB, gitignored), `stochastic_cell_sample.csv` (15 GB, gitignored), `ann_occ_max_hail.npy`, `ann_occ_fp_km2.npy`, `ann_occ_n_cells.npy`, `ann_agg_max_hail.npy`, `ann_agg_fp_km2.npy`
+| Metric | What it means for insurance |
+|---|---|
+| Occurrence `max_hail_in` at RP=100 | In a 1-in-100 year, the worst single hail event produced at least this much peak hail somewhere in CONUS |
+| Occurrence `n_cells` at RP=100 | In a 1-in-100 year, the worst single hail event covered at least this many 28×28 km cells |
+| Aggregate `agg_n_cells` at RP=100 | In a 1-in-100 year, the annual sum of cell-events (cells hit × 1.0" across all events in the year) exceeded this value |
+
+The occurrence metrics are relevant for per-event reinsurance structures (catastrophe bonds, per-occurrence excess of loss treaties). The aggregate metric is relevant for annual aggregate covers.
+
+**Key parameters:** N_SIM_YEARS = 50,000; σ_perturb = 0.15; seasonal weight decay = 30 days; damage threshold 1.0 inch; physical ceiling 10 inches; RNG_SEED = 42.
+
+**Outputs in `data/stochastic/`:** `stochastic_event_summary.csv` (one row per simulated event with template_event_id), `pet_occurrence.csv` (`return_period_yr, max_hail_in, n_cells`), `pet_aggregate.csv` (`return_period_yr, agg_n_cells, agg_events`), `ann_occ_max_hail.npy`, `ann_occ_n_cells.npy`, `ann_agg_n_cells.npy`, `active_flat_idx.npy`
+
+**Note on PET values:** The PET table in Section 6 will be updated after re-running the catalog with the new methodology. The numbers will differ from the previous version because the event-resampling approach preserves real event geometry rather than synthesising fields from a copula.
 
 ---
 
@@ -547,15 +581,19 @@ Based on the fitted lognormal + GPD model at key locations (from `data/hail_0.25
 
 ### CONUS-Wide Stochastic PET
 
-From `data/stochastic/pet_occurrence.csv` (the worst-single-event-per-year metric):
+> **Note:** The PET numbers below will be updated after re-running the stochastic catalog with the new event-resampling methodology (Step 14). The previous values used a field-based Cholesky copula approach that has been replaced. The columns have also changed: `footprint_km²` has been removed and replaced with `n_cells` (number of 28×28 km grid cells), which is a more interpretable and directly usable metric for portfolio exposure.
 
-| Return Period | Max Hail (CONUS) | Footprint km² |
+From `data/stochastic/pet_occurrence.csv` (the worst-single-event-per-year metric, **to be regenerated**):
+
+| Return Period | Max Hail (CONUS) | N Cells (worst event) |
 |---|---|---|
-| 2-year | 8.89" | 1,897,434 |
-| 10-year | 8.89" | 2,661,336 |
-| 100-year | 8.97" | 2,917,767 |
-| 500-year | 9.43" | 3,029,426 |
-| 10,000-year | 9.53" | 3,196,530 |
+| 2-year | — | — |
+| 10-year | — | — |
+| 100-year | — | — |
+| 500-year | — | — |
+| 10,000-year | — | — |
+
+*Re-run `scripts/14_generate_stochastic_catalog.py` to populate this table.*
 
 ### Interpreting the Comparison
 
@@ -563,11 +601,13 @@ These two sets of numbers are measuring fundamentally different things, so a dir
 
 The **historical cell-level RP** at Wichita says: "In any given year, there is a 1% chance that Wichita gets 4.0+ inch hail." This is a useful number for a risk manager with a portfolio concentrated in the Wichita metro area.
 
-The **stochastic CONUS-wide PET** says: "In any given year, there is a 1% chance that the single worst hail event covers more than 2,917,767 km² of CONUS." This is a useful number for a reinsurer trying to understand their maximum CONUS-wide hail exposure in a single catastrophic year.
+The **stochastic CONUS-wide occurrence PET** says: "In any given year, there is a 1% chance that the single worst hail event produced peak hail above X inches, and covered more than Y cells of CONUS." This is a useful number for a reinsurer trying to understand their maximum CONUS-wide hail exposure in a single catastrophic year.
 
-The two metrics naturally disagree on max hail: the CONUS-wide max is always near the historical ceiling (~9") because with 127 events per year and 12,811 active cells, near-record hail somewhere in CONUS is virtually certain. The 10-year stochastic max equals the 100-year stochastic max (8.89" vs 8.97") because extreme hail is so common at the CONUS level. In contrast, the Wichita 10-year RP (2.3") differs substantially from the 100-year RP (4.0"), because the return period signal at a single location carries real geographic information.
+The two metrics naturally disagree on max hail: the CONUS-wide max is always near the historical ceiling (~9") because with ~130 events per year, near-record hail somewhere in CONUS is virtually certain. The return period signal at a single cell (e.g., Wichita 10-yr = 2.3" vs 100-yr = 4.0") carries real geographic information, whereas the CONUS-wide occurrence max changes little across return periods.
 
-For per-location or portfolio work — the most common use case in insurance — the right approach is to derive per-cell stochastic return periods from `stochastic_event_summary.csv` by filtering to events that overlap each cell of interest. This 289 MB file (gitignored) contains the full event-level data needed for this analysis.
+The **aggregate PET** (`agg_n_cells`) is distinct from the occurrence PET: it measures the total annual geographic exposure — the sum of all cells hit by damaging hail across every event in a year. At high return periods, this captures rare "active seasons" with many simultaneous large events, which drive annual aggregate reinsurance losses.
+
+For per-location or portfolio work — the most common use case in insurance — the right approach is to derive per-cell stochastic return periods from `stochastic_event_summary.csv` by filtering to events whose template footprint overlaps each cell of interest and joining back to the event peak array.
 
 ---
 
@@ -615,7 +655,7 @@ This event also predates our 2004 data cutoff by less than a year. However, it i
 
 **22-year record.** The GPD tail extrapolation to 100-year and 500-year return periods is statistically grounded but empirically thin. With 22 years of data, we are extrapolating 5-fold to 25-fold beyond the observational record. The L-moment fitting method (Step 10) is more stable than MLE for small samples, but stability does not equal accuracy. The true 500-year hail size at any location has substantial uncertainty bands that are wider than the point estimate would suggest.
 
-**Lambda variance gap.** The stochastic simulation (Step 14) uses λ = 150 km for spatial correlation. Even with this value — already much larger than the empirical λ ≈ 33 km from SPC data — the simulated aggregate variance is only about 12% of historical. This means the model underestimates the tendency of large-footprint events to concentrate damage across many cells simultaneously. The fundamental cause is that SPC point reports cannot capture the continuous hail swath structure that radar sees — a supercell may produce a 5 km wide, 50 km long hail swath, but SPC data may have only 2–5 points scattered within it. This gap limits the accuracy of the aggregate PET and would require MRMS MESH data to close.
+**Limited template library (22 years, ~2,982 events).** The event-resampling approach (Step 14) draws simulated events from the historical event catalog. With only 22 years of data, the template library contains a finite number of distinct spatial footprint geometries. Very rare footprint shapes — a simultaneous multi-state outbreak with a coherent geometry that has never occurred in the 2004–2026 record — cannot be generated by pure resampling; they can only appear as perturbed versions of something historically observed. The log-normal intensity perturbation (σ = 0.15) adds variability but does not alter the geographic footprint shape. As the template library grows with additional years of data, this limitation diminishes. A future enhancement would combine resampling with a learned spatial perturbation model (e.g., from MRMS MESH data) to generate novel footprint geometries.
 
 **No topographic correction.** Elevation and terrain affect hail in multiple ways: high-altitude locations have thinner air, affecting the terminal velocity of hailstones and the efficiency of hail formation; mountain ranges channel and modify thunderstorm tracks; the Front Range of Colorado sees pronounced hail enhancement from upslope flow. Our model treats all cells equivalently regardless of elevation.
 
@@ -639,7 +679,7 @@ This event also predates our 2004 data cutoff by less than a year. However, it i
 
 **Exposure integration.** Link to a county or ZIP-level total insured value (TIV) database, stratified by occupancy class and construction type. Combined with the hazard layer and vulnerability curves, this would produce a full EP curve and AAL (average annual loss) estimate.
 
-**Re-run stochastic with λ = 200 km.** The `cholesky_L_200km.npy` file already exists. Re-running Step 14 with `LAMBDA_KM = 200` would produce a stochastic catalog with higher aggregate variance, better matching the historical observations.
+**Extend template library with MRMS MESH data.** Replacing or supplementing the SPC-based event footprints with NOAA MRMS MESH (Maximum Expected Size of Hail) radar data would allow novel footprint geometries to be generated, removing the 22-year template-library constraint from the event-resampling approach.
 
 **Per-cell PET derivation.** `stochastic_event_summary.csv` (289 MB, gitignored) contains the full 6.3 million event catalog. Spatially joining this to any set of grid cells and building cell-specific exceedance curves would provide per-location stochastic return period estimates — far more useful for portfolio analysis than the CONUS-wide PET.
 
@@ -661,7 +701,7 @@ This event also predates our 2004 data cutoff by less than a year. However, it i
 
 **Decorrelation length lambda (λ).** The distance at which spatial correlation drops to 1/e ≈ 0.368 in our exponential model ρ(d) = exp(−d/λ). Larger λ means correlation persists over longer distances — a hailstorm is more likely to affect nearby cells simultaneously. Our model uses λ = 200 km for the CDF layer (best fit to historical variance) and λ = 150 km for the stochastic simulation (design choice). Empirical λ from SPC data is only ~33 km, reflecting data sparsity rather than atmospheric physics.
 
-**Event catalog.** A tabular record of all discrete historical hail events identified in the pipeline. In our model, the event catalog contains 2,928 rows, one per event, with columns for start date, end date, duration, footprint area, and peak hail size. Events are identified by temporal and spatial clustering of days where hail exceeded 1.0 inch somewhere in CONUS.
+**Event catalog.** A tabular record of all discrete historical hail events identified in the pipeline. In our model, the event catalog contains one row per event, with columns for start date, end date, duration (capped at 5 days), n_active_cells, footprint_area_km2, peak_hail_max_in, peak_hail_mean_in, centroid_lat, and centroid_lon. Events are identified by the synoptic-system grouping rule: active days within a temporal gap of ≤ 1 day are merged if their hail footprints overlap within 83 km, subject to a hard 5-day duration cap.
 
 **FIPS code.** Federal Information Processing Standards code — a 5-digit numeric identifier for US counties. The first 2 digits identify the state (01=Alabama, 06=California, 48=Texas, etc.) and the last 3 identify the county within that state. Los Angeles County is 06037. Used as the universal join key between Census data and storm report data in this model.
 
