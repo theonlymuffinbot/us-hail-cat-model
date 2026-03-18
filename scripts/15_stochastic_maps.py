@@ -1,25 +1,36 @@
 #!/usr/bin/env python3
 """
-15_stochastic_maps.py  —  Per-cell stochastic hazard maps
-==========================================================
-Runs a lean 2,000-year simulation using cached CDF lookup + Cholesky.
-Everything preloaded; zero I/O inside the event loop.
+15_stochastic_maps.py  —  Per-cell stochastic hazard maps (event-resampling)
+===========================================================================
+Runs a lean 2,000-year simulation using event-resampling (same methodology
+as stage 14) to produce per-cell return period maps and occurrence probability
+maps.
 
-Key fix vs previous version:
-  - p_occurrence.tif stores ANNUAL probability (0.1–0.75 range).
-    Per-event fire probability = p_annual / lambda_events  (~0.001–0.006).
-    This is the correct per-event zero-inflation probability.
-  - Vectorised CDF lookup: cdf[bins, np.arange(N_ACT)] instead of per-cell loop.
-  - ann_max updated with np.maximum.at() which handles duplicate indices safely.
+Methodology (matches stage 14):
+  1. Load event_catalog.csv + event_peak_array.npy (historical templates)
+  2. λ = n_hist_events / n_years_of_record
+  3. Per simulated year:
+     - Draw N ~ Poisson(λ)
+     - For each event: resample template weighted by exp(-|doy_diff|/30)
+     - Apply log-normal intensity perturbation (σ=0.15)
+     - Accumulate per-cell annual max hail
+  4. Build return period maps and p_occ maps from 2,000 annual max arrays
 
-Memory: ~1.2 GB peak  Runtime: ~20-30 min
+Outputs: data/stochastic/maps/
+  stoch_rp_{10,25,50,100,200,500}yr_hail.tif
+  stoch_p_occurrence.tif  (= stoch_p_occ_1p00in.tif, for compatibility)
+  stoch_p_occ_{0p25,...,5p00}in.tif
+
+Comparison figures: docs/figures/maps/
+  stoch_vs_hist_rp_100yr_comparison.png
+  stoch_vs_hist_p_occ_1p00in_comparison.png
+
+Memory: ~250 MB peak   Runtime: ~3-8 min
 """
 
-import sys, datetime
+import sys
 from pathlib import Path
 import numpy as np
-from scipy.special import ndtr
-from scipy.ndimage import uniform_filter1d
 import pandas as pd
 import rasterio
 from rasterio.transform import from_bounds
@@ -33,34 +44,38 @@ REPO  = Path(__file__).resolve().parent.parent
 DATA  = REPO / "data"
 STOCH = DATA / "stochastic"
 HIST  = DATA / "hail_0.25deg"
-CLIMO = DATA / "hail_0.25deg_climo"
-OUT_D = STOCH / "maps";           OUT_D.mkdir(exist_ok=True)
-OUT_F = REPO / "docs/figures/stochastic"; OUT_F.mkdir(exist_ok=True)
+OUT_D = STOCH / "maps";           OUT_D.mkdir(parents=True, exist_ok=True)
+OUT_F = REPO / "docs/figures/maps"; OUT_F.mkdir(parents=True, exist_ok=True)
 
-N_SIM      = 2_000
-LAM_EVT    = 127.3
-LAM_KM     = 150.0
-SEED       = 77
-THRESH     = 0.25
-RP_YRS     = [10, 25, 50, 100, 200, 500]
-POCC_T     = [0.25, 0.50, 1.00, 1.50, 2.00, 3.00, 4.00, 5.00]
+N_SIM         = 2_000
+SIGMA_PERTURB = 0.15
+RNG_SEED      = 42
+THRESH        = 0.25          # minimum hail size to count (inches)
+RP_YRS        = [10, 25, 50, 100, 200, 500]
+POCC_T        = [0.25, 0.50, 1.00, 1.50, 2.00, 3.00, 4.00, 5.00]
+MAX_HAIL_PHYS = 10.0          # physical ceiling (inches)
+
 NROWS, NCOLS = 104, 236
 LAT_MAX, LAT_MIN = 48.875, 22.875
 LON_MIN, LON_MAX = -124.875, -65.125
-CS         = 0.25
-NODATA     = -9999.0
-KM_LAT     = 111.0
+CS           = 0.25
+NODATA       = -9999.0
+
+
+# ── Output filenames ──────────────────────────────────────────────────────────
+def _pocc_tag(t):
+    return f"{t:.2f}".replace(".", "p")
+
 
 def validate_outputs() -> bool:
-    """Validate all outputs produced by this stage. Returns True if all pass."""
+    """Validate all expected output TIFs exist and are readable."""
     errors = []
-    out_d = STOCH / "maps"
-    rp_fnames = [f"stoch_rp_{rp}yr_hail.tif" for rp in RP_YRS]
-    pocc_fnames = [f"stoch_p_occ_{f'{t:.2f}'.replace('.','p')}in.tif" for t in POCC_T]
-    expected = rp_fnames + ["stoch_p_occurrence.tif"] + pocc_fnames
+    rp_fnames   = [f"stoch_rp_{rp}yr_hail.tif"        for rp in RP_YRS]
+    pocc_fnames = [f"stoch_p_occ_{_pocc_tag(t)}in.tif" for t  in POCC_T]
+    expected    = rp_fnames + ["stoch_p_occurrence.tif"] + pocc_fnames
 
     for fname in expected:
-        p = out_d / fname
+        p = OUT_D / fname
         if not p.exists():
             errors.append(f"Missing: {fname}")
         elif p.stat().st_size == 0:
@@ -75,290 +90,233 @@ def validate_outputs() -> bool:
     if errors:
         print("CRITICAL: Output validation FAILED:")
         for e in errors:
-            print(f"  ✗ {e}")
+            print(f"  x {e}")
         return False
-    print("Output validation passed ✓")
+    print("Output validation passed")
     return True
 
 
-# ── --validate early exit ──────────────────────────────────────────────────────
-import sys as _sys
-if "--validate" in _sys.argv:
+# ── --validate early exit ─────────────────────────────────────────────────────
+if "--validate" in sys.argv:
     ok = validate_outputs()
-    _sys.exit(0 if ok else 1)
+    sys.exit(0 if ok else 1)
 
+
+# ── Raster helpers ────────────────────────────────────────────────────────────
 def write_tif(arr, path):
-    tr = from_bounds(LON_MIN-CS/2, LAT_MIN-CS/2, LON_MAX+CS/2, LAT_MAX+CS/2, NCOLS, NROWS)
+    tr = from_bounds(LON_MIN - CS / 2, LAT_MIN - CS / 2,
+                     LON_MAX + CS / 2, LAT_MAX + CS / 2, NCOLS, NROWS)
     with rasterio.open(path, "w", driver="GTiff", dtype="float32",
                        width=NCOLS, height=NROWS, count=1, crs="EPSG:4326",
                        transform=tr, nodata=NODATA, compress="lzw") as dst:
         dst.write(arr.astype(np.float32), 1)
 
-def doy_to_mmdd(doy):
-    d = datetime.date(2000,1,1) + datetime.timedelta(days=int(doy)-1)
-    return f"{d.month:02d}{d.day:02d}"
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1. Load inputs
+# ═══════════════════════════════════════════════════════════════════════════════
 print("=== Loading inputs ===", flush=True)
 
-act_idx  = np.load(STOCH/"active_flat_idx.npy")   # (12811,)
-cdf_p    = np.load(STOCH/"cdf_quant_p.npy")       # (2000,)
-chol_L   = np.load(HIST/"cholesky_L_150km.npy")   # (800,800)
-seed_idx = np.load(HIST/"corr_cell_idx.npy")       # (800,)
-N_ACT    = len(act_idx)
-N_SEED   = len(seed_idx)
+ec = pd.read_csv(HIST / "event_catalog.csv", parse_dates=["start_date", "end_date"])
+n_hist_events  = len(ec)
+n_years_record = int(ec["start_date"].dt.year.nunique())
+lambda_events  = n_hist_events / n_years_record
+event_doys     = ec["start_date"].dt.dayofyear.values.astype(np.int32)
 
-print(f"  active={N_ACT}, seed={N_SEED}", flush=True)
-print("  Loading CDF lookup (98 MB)...", flush=True)
-cdf_lut = np.load(STOCH/"cdf_lookup.npy")         # (2000, 12811) — loads fully
-print(f"  CDF loaded: {cdf_lut.shape}", flush=True)
+print(f"  Events: {n_hist_events:,} over {n_years_record} years, "
+      f"lambda={lambda_events:.2f} ev/yr", flush=True)
 
-# Annual p_occ per active cell
-with rasterio.open(HIST/"p_occurrence.tif") as src:
-    p_occ_full = src.read(1).astype(np.float32)
-p_occ_ann = p_occ_full.flat[act_idx].copy()       # (12811,) ANNUAL probability
+print("  Loading event_peak_array.npy ...", flush=True)
+event_peak_array = np.load(HIST / "event_peak_array.npy")   # (n_events, 104, 236)
+assert event_peak_array.shape == (n_hist_events, NROWS, NCOLS), \
+    f"Unexpected shape {event_peak_array.shape}"
+print(f"  event_peak_array: {event_peak_array.shape}", flush=True)
 
-# ── KEY FIX: per-event fire probability ──────────────────────────────────
-# p_occurrence.tif = P(cell hit at least once per year)
-# Assuming Poisson events: P(hit in one event) ≈ p_annual / lambda_events
-# More precisely: p_event = 1 - (1-p_annual)^(1/lambda) ≈ p_annual/lambda for small p
-p_evt = p_occ_ann / LAM_EVT                       # (12811,)  ~0.001 to 0.006
-print(f"  p_evt range: {p_evt.min():.5f} to {p_evt.max():.5f}, mean={p_evt.mean():.5f}", flush=True)
+# Active cell flat indices (from stage 14 output)
+act_idx = np.load(STOCH / "active_flat_idx.npy")            # (N_ACT,)
+N_ACT   = len(act_idx)
+print(f"  Active cells: {N_ACT:,}", flush=True)
 
-# ── Pre-load climo seasonal weights ──────────────────────────────────────
-print("  Pre-loading climo rasters (366 files)...", flush=True)
-# seasonal_scale[doy] = per-cell weight (not probability) summing seasonal variation
-seasonal_scale = np.ones((367, N_ACT), dtype=np.float32)
-if CLIMO.exists():
-    climo_files = {f.stem.replace("climo_",""): f for f in sorted(CLIMO.glob("climo_*.tif"))}
-    for doy in range(1, 367):
-        mmdd = doy_to_mmdd(doy)
-        if mmdd not in climo_files:
-            continue
-        with rasterio.open(climo_files[mmdd]) as src:
-            arr = src.read()                       # (29, 104, 236)
-        total = arr.sum(axis=0).flat[act_idx].astype(np.float32)
-        mx = total.max()
-        if mx > 0:
-            seasonal_scale[doy] = total / mx
-    print(f"  Loaded {len(climo_files)} climo files", flush=True)
 
-# ── Event DOY distribution ────────────────────────────────────────────────
-cat = pd.read_csv(HIST/"event_catalog.csv")
-date_col = next((c for c in ["start_date","date","Date","event_date"] if c in cat.columns), None)
-if date_col:
-    doys_hist = pd.to_datetime(cat[date_col]).dt.dayofyear.values
-    doy_w = np.zeros(366, dtype=np.float32)
-    for d in doys_hist:
-        doy_w[min(d-1,365)] += 1
-    doy_w = uniform_filter1d(doy_w, size=28, mode='wrap')
-    doy_w /= doy_w.sum()
-else:
-    doy_w = np.full(366, 1/366, dtype=np.float32)
-doy_choices = np.arange(1, 367)
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2. Seasonal DOY distribution
+# ═══════════════════════════════════════════════════════════════════════════════
+from scipy.ndimage import gaussian_filter1d
 
-# ── Correlation mapping ───────────────────────────────────────────────────
-print("  Building correlation map...", flush=True)
-sr = seed_idx // NCOLS; sc = seed_idx % NCOLS
-sl = LAT_MAX - sr*CS;   so = LON_MIN + sc*CS
-ar = act_idx  // NCOLS; ac = act_idx  % NCOLS
-al = LAT_MAX - ar*CS;   ao = LON_MIN + ac*CS
-parent = np.zeros(N_ACT, dtype=np.int32)
-rho    = np.zeros(N_ACT, dtype=np.float32)
-for s in range(0, N_ACT, 500):
-    e = min(s+500, N_ACT)
-    dy = (al[s:e,None] - sl[None,:]) * KM_LAT
-    dx = (ao[s:e,None] - so[None,:]) * KM_LAT * np.cos(np.radians(al[s:e,None]))
-    d  = np.sqrt(dx**2 + dy**2)
-    nn = np.argmin(d, axis=1)
-    parent[s:e] = nn
-    rho[s:e]    = np.exp(-d[np.arange(e-s), nn] / LAM_KM).astype(np.float32)
-rho_c = np.sqrt(np.maximum(0.0, 1.0-rho**2)).astype(np.float32)
-print("  Correlation map done.", flush=True)
+daily_count = np.zeros(366, dtype=np.float64)
+for d in event_doys:
+    daily_count[min(d, 366) - 1] += 1.0
+padded     = np.tile(daily_count, 3)
+smoothed   = gaussian_filter1d(padded, sigma=10.0)
+daily_prob = smoothed[366:732]
+daily_prob /= daily_prob.sum()
+doy_cdf    = np.cumsum(daily_prob)
+doy_values = np.arange(1, 367)
 
-# ══════════════════════════════════════════════════════════════════════════
-print(f"\n=== Simulating {N_SIM:,} years ===", flush=True)
-rng     = np.random.default_rng(SEED)
-# Per-cell annual max: shape (N_SIM, N_ACT)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3. Simulate 2,000 years — event-resampling
+# ═══════════════════════════════════════════════════════════════════════════════
+print(f"\n=== Simulating {N_SIM:,} years (event-resampling) ===", flush=True)
+
+rng     = np.random.default_rng(RNG_SEED)
+# Per-cell annual max: (N_SIM, N_ACT)  ~100 MB
 ann_max = np.zeros((N_SIM, N_ACT), dtype=np.float32)
 
 for yr in range(N_SIM):
     if yr % 200 == 0:
         print(f"  Year {yr}/{N_SIM}...", flush=True)
 
-    n_evt = rng.poisson(LAM_EVT)
+    n_evt = int(rng.poisson(lambda_events))
     if n_evt == 0:
         continue
 
-    evt_doys = rng.choice(doy_choices, size=n_evt, p=doy_w)
+    year_max = np.zeros(N_ACT, dtype=np.float32)
 
-    for doy in evt_doys:
-        # Per-event fire prob: scale annual p_evt by seasonal weight
-        p_fire = p_evt * seasonal_scale[doy]       # (N_ACT,)
+    # Draw all event DOYs for this year at once
+    u_date  = rng.random(n_evt)
+    ev_doys = doy_values[np.searchsorted(doy_cdf, u_date)]
 
-        # Correlated z-scores
-        z_seed = (chol_L @ rng.standard_normal(N_SEED)).astype(np.float32)
-        z_act  = rho * z_seed[parent] + rho_c * rng.standard_normal(N_ACT).astype(np.float32)
+    for ev_i in range(n_evt):
+        doy = int(ev_doys[ev_i])
 
-        # Fire decision
-        u     = ndtr(z_act).astype(np.float32)
-        fired = u < p_fire                          # (N_ACT,) bool
-        if not fired.any():
-            continue
+        # Seasonal template weights
+        doy_diff = np.abs(event_doys - doy)
+        doy_diff = np.minimum(doy_diff, 366 - doy_diff)
+        weights  = np.exp(-doy_diff / 30.0)
+        weights /= weights.sum()
 
-        fi = np.where(fired)[0]                    # indices into active cells
+        # Resample historical template
+        tmpl_idx     = int(rng.choice(n_hist_events, p=weights))
+        scale_factor = float(np.exp(SIGMA_PERTURB * rng.standard_normal()))
 
-        # CDF inversion — conditional on firing
-        # Re-draw uniform conditional on u < p_fire using the correlated z directly
-        # u_cond in (0,1) given firing: u_cond = u_fired / p_fire_fired
-        u_cond = np.clip(u[fired] / np.maximum(p_fire[fired], 1e-9), 0.0, 0.9999)
+        # Extract active-cell hail values and apply perturbation
+        hail_flat = event_peak_array[tmpl_idx].ravel()[act_idx] * scale_factor
+        np.clip(hail_flat, 0.0, MAX_HAIL_PHYS, out=hail_flat)
 
-        # Map through CDF lookup
-        bins = np.searchsorted(cdf_p, u_cond).clip(0, len(cdf_p)-1)
-        hail = cdf_lut[bins, fi]                   # (n_fired,) — vectorised
+        np.maximum(year_max, hail_flat, out=year_max)
 
-        # Update annual max (use np.maximum.at for safety with repeated indices)
-        big = hail >= THRESH
-        if big.any():
-            np.maximum.at(ann_max[yr], fi[big], hail[big])
+    ann_max[yr] = year_max
 
 print("  Simulation complete.", flush=True)
 
-# ══════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4. Per-cell return period and p_occ maps
+# ═══════════════════════════════════════════════════════════════════════════════
 print("\n=== Computing per-cell statistics ===", flush=True)
 
-rp_g    = {rp: np.full((NROWS,NCOLS), NODATA, np.float32) for rp in RP_YRS}
-poc_g   = {t:  np.full((NROWS,NCOLS), NODATA, np.float32) for t  in POCC_T}
-poc_any = np.full((NROWS,NCOLS), NODATA, np.float32)
+rp_g    = {rp: np.full((NROWS, NCOLS), NODATA, np.float32) for rp in RP_YRS}
+poc_g   = {t:  np.full((NROWS, NCOLS), NODATA, np.float32) for t  in POCC_T}
 
 for i, flat in enumerate(act_idx):
     row, col = int(flat // NCOLS), int(flat % NCOLS)
-    ann = ann_max[:, i]                            # (N_SIM,)
-    p   = float(np.mean(ann >= THRESH))
-    poc_any[row, col] = p
+    ann      = ann_max[:, i]                          # (N_SIM,)
+
     for t in POCC_T:
         poc_g[t][row, col] = float(np.mean(ann >= t))
+
+    ann_sorted = np.sort(ann)[::-1]                   # descending
     for rp in RP_YRS:
-        q = float(np.quantile(ann, 1.0 - 1.0 / rp))
+        rank = int(N_SIM / rp)
+        rank = max(0, min(rank, N_SIM - 1))
+        q    = float(ann_sorted[rank])
         rp_g[rp][row, col] = q if q >= THRESH else NODATA
 
 del ann_max
 
-# Apply CONUS mask
-if (HIST/"rp_100yr_hail.tif").exists():
-    with rasterio.open(HIST/"rp_100yr_hail.tif") as src:
-        hm  = src.read(1); hnd = src.nodata or -9999
-    out = (hm == hnd) | (hm <= 0)
-    for g in list(rp_g.values()) + list(poc_g.values()) + [poc_any]:
-        g[out] = NODATA
+# Apply CONUS mask from historical 100yr map
+if (HIST / "rp_100yr_hail.tif").exists():
+    with rasterio.open(HIST / "rp_100yr_hail.tif") as src:
+        hm  = src.read(1)
+        hnd = src.nodata if src.nodata is not None else -9999
+    ocean = (hm == hnd) | (hm <= 0)
+    for g in list(rp_g.values()) + list(poc_g.values()):
+        g[ocean] = NODATA
 
 # Sanity check
-valid_rp = np.sum(rp_g[100] != NODATA)
-valid_po = np.sum(poc_any != NODATA)
-max_rp   = np.max(rp_g[100][rp_g[100] != NODATA]) if valid_rp > 0 else 0
-print(f"  Sanity: rp100 valid={valid_rp} max={max_rp:.2f}in  p_occ valid={valid_po}", flush=True)
+valid_rp = int(np.sum(rp_g[100] != NODATA))
+max_rp   = float(np.max(rp_g[100][rp_g[100] != NODATA])) if valid_rp > 0 else 0
+print(f"  rp100: valid={valid_rp} max={max_rp:.2f}in", flush=True)
+print(f"  p_occ_1in: valid={int(np.sum(poc_g[1.0] != NODATA))}", flush=True)
 
-# ══════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. Write GeoTIFFs
+# ═══════════════════════════════════════════════════════════════════════════════
 print("\n=== Writing GeoTIFFs ===", flush=True)
+
 for rp in RP_YRS:
-    write_tif(rp_g[rp], OUT_D/f"stoch_rp_{rp}yr_hail.tif")
+    write_tif(rp_g[rp], OUT_D / f"stoch_rp_{rp}yr_hail.tif")
     print(f"  stoch_rp_{rp}yr_hail.tif", flush=True)
-write_tif(poc_any, OUT_D/"stoch_p_occurrence.tif")
+
 for t in POCC_T:
-    tag = f"{t:.2f}".replace(".","p")
-    write_tif(poc_g[t], OUT_D/f"stoch_p_occ_{tag}in.tif")
-print("  TIFs written.", flush=True)
+    tag = _pocc_tag(t)
+    write_tif(poc_g[t], OUT_D / f"stoch_p_occ_{tag}in.tif")
+    print(f"  stoch_p_occ_{tag}in.tif", flush=True)
 
-# ══════════════════════════════════════════════════════════════════════════
-print("\n=== Rendering figures ===", flush=True)
+# stoch_p_occurrence.tif = stoch_p_occ_1p00in.tif (for compatibility)
+write_tif(poc_g[1.00], OUT_D / "stoch_p_occurrence.tif")
+print("  stoch_p_occurrence.tif", flush=True)
 
-HAIL_LEV = [0,.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,7,9]
-PROB_LEV = [0,.02,.05,.10,.15,.20,.30,.40,.50,.65,.80,1.0]
+print(f"  Total TIFs: {len(list(OUT_D.glob('*.tif')))}", flush=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6. Comparison figures (stochastic vs historical)
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n=== Rendering comparison figures ===", flush=True)
+
+HAIL_LEV = [0, .5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 6, 7, 9]
+PROB_LEV = [0, .02, .05, .10, .15, .20, .30, .40, .50, .65, .80, 1.0]
 HCMAP, PCMAP = plt.cm.YlOrRd, plt.cm.plasma
-EXT  = [LON_MIN-CS/2, LON_MAX+CS/2, LAT_MIN-CS/2, LAT_MAX+CS/2]
-LABEL = f"{N_SIM:,}-yr sim, λ={LAM_KM:.0f} km"
+EXT = [LON_MIN - CS/2, LON_MAX + CS/2, LAT_MIN - CS/2, LAT_MAX + CS/2]
 
-def msk(a): return np.ma.masked_where(a==NODATA, a)
+def msk(a):
+    return np.ma.masked_where(a == NODATA, a)
 
-def single(arr, title, cmap, levs, path, cbl):
-    norm = BoundaryNorm(levs, cmap.N)
-    fig, ax = plt.subplots(figsize=(12,6))
-    im = ax.imshow(msk(arr), extent=EXT, origin="upper", cmap=cmap, norm=norm, interpolation="nearest")
-    ax.set_title(title, fontsize=12, fontweight="bold")
-    ax.set_xlabel("Longitude"); ax.set_ylabel("Latitude")
-    cb = fig.colorbar(im, ax=ax, orientation="horizontal", pad=0.08, shrink=0.7)
-    cb.set_label(cbl, fontsize=10)
-    plt.tight_layout(); fig.savefig(path, dpi=150, bbox_inches="tight"); plt.close(fig)
-    print(f"  {path.name}", flush=True)
-
-def panel(arrs, titles, suptitle, cmap, levs, path, cbl):
-    norm = BoundaryNorm(levs, cmap.N)
-    n = len(arrs); cols = 3; rows = (n+2)//3
-    fig, axes = plt.subplots(rows, cols, figsize=(20, 7*rows))
-    axes = axes.flatten()
-    im = None
-    for i,(arr,tit) in enumerate(zip(arrs,titles)):
-        im = axes[i].imshow(msk(arr), extent=EXT, origin="upper", cmap=cmap, norm=norm, interpolation="nearest")
-        axes[i].set_title(tit, fontsize=11, fontweight="bold")
-        axes[i].set_xlabel("Lon"); axes[i].set_ylabel("Lat")
-    for j in range(len(arrs), len(axes)): axes[j].set_visible(False)
-    fig.suptitle(suptitle, fontsize=14, fontweight="bold")
-    if im:
-        cb = fig.colorbar(im, ax=axes[:len(arrs)].tolist(), orientation="vertical", shrink=0.7, pad=0.02)
-        cb.set_label(cbl, fontsize=11)
-    plt.tight_layout(); fig.savefig(path, dpi=150, bbox_inches="tight"); plt.close(fig)
-    print(f"  {path.name}", flush=True)
-
-def compare(stoch, hist_path, title, cmap, levs, path, cbl):
-    if not hist_path.exists(): return
+def compare(stoch_arr, hist_path, title, cmap, levs, path, cbl):
+    if not hist_path.exists():
+        print(f"  Skipping (no historical): {hist_path.name}", flush=True)
+        return
     with rasterio.open(hist_path) as src:
-        ha = src.read(1).astype(np.float32); hnd = src.nodata or -9999
-    ha[ha==hnd] = np.nan
+        ha  = src.read(1).astype(np.float32)
+        hnd = src.nodata if src.nodata is not None else -9999
+    ha[ha == hnd] = np.nan
     norm = BoundaryNorm(levs, cmap.N)
-    fig, axes = plt.subplots(1, 2, figsize=(20,7))
+    fig, axes = plt.subplots(1, 2, figsize=(20, 7))
     kw = dict(extent=EXT, origin="upper", cmap=cmap, norm=norm, interpolation="nearest")
     axes[0].imshow(np.ma.masked_invalid(ha), **kw)
-    axes[0].set_title(f"Historical\n(22-yr record, smoothed CDF)", fontsize=11, fontweight="bold")
+    axes[0].set_title(f"Historical ({n_years_record}-yr record)", fontsize=11, fontweight="bold")
     axes[0].set_xlabel("Longitude"); axes[0].set_ylabel("Latitude")
-    im = axes[1].imshow(msk(stoch), **kw)
-    axes[1].set_title(f"Stochastic\n({LABEL})", fontsize=11, fontweight="bold")
+    im = axes[1].imshow(msk(stoch_arr), **kw)
+    axes[1].set_title(f"Stochastic ({N_SIM:,}-yr event-resampling)", fontsize=11, fontweight="bold")
     axes[1].set_xlabel("Longitude"); axes[1].set_ylabel("Latitude")
     fig.suptitle(f"Historical vs Stochastic — {title}", fontsize=13, fontweight="bold")
     cb = fig.colorbar(im, ax=axes.tolist(), orientation="horizontal", pad=0.06, shrink=0.6)
     cb.set_label(cbl, fontsize=11)
-    plt.tight_layout(); fig.savefig(path, dpi=150, bbox_inches="tight"); plt.close(fig)
+    plt.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
     print(f"  {path.name}", flush=True)
 
-for rp in RP_YRS:
-    single(rp_g[rp], f"Stochastic {rp}-Year Return Period Hail  ({LABEL})",
-           HCMAP, HAIL_LEV, OUT_F/f"stoch_rp_{rp}yr_hail.png", "Hail Size (inches)")
+compare(rp_g[100], HIST / "rp_100yr_hail.tif",
+        "100-Year Return Period Hail",
+        HCMAP, HAIL_LEV,
+        OUT_F / "stoch_vs_hist_rp_100yr_comparison.png",
+        "Hail Size (inches)")
 
-panel([rp_g[r] for r in RP_YRS], [f"{r}-Year RP" for r in RP_YRS],
-      f"Stochastic Return Period Hail Maps  ({LABEL})",
-      HCMAP, HAIL_LEV, OUT_F/"stoch_rp_all_panel.png", "Hail Size (inches)")
+compare(poc_g[1.00], HIST / "p_occ_1p00in.tif",
+        "Annual P(Hail >= 1.0\")",
+        PCMAP, PROB_LEV,
+        OUT_F / "stoch_vs_hist_p_occ_1p00in_comparison.png",
+        "Annual Probability")
 
-single(poc_any, f"Stochastic Annual P(Hail ≥ 0.25\")  ({LABEL})",
-       PCMAP, PROB_LEV, OUT_F/"stoch_p_occurrence.png", "Annual Probability")
+print(f"\n=== Done: {len(list(OUT_D.glob('*.tif')))} TIFs, "
+      f"{len(list(OUT_F.glob('*.png')))} PNGs ===", flush=True)
 
-for t in POCC_T:
-    tag = f"{t:.2f}".replace(".","p")
-    single(poc_g[t], f"Stochastic Annual P(Hail ≥ {t}\")  ({LABEL})",
-           PCMAP, PROB_LEV, OUT_F/f"stoch_p_occ_{tag}in.png", "Annual Probability")
-
-panel([poc_g[t] for t in [0.25,0.50,1.00,1.50,2.00,3.00]],
-      [f"P(Hail ≥ {t}\")" for t in [0.25,0.50,1.00,1.50,2.00,3.00]],
-      f"Stochastic Annual Hail Occurrence Probabilities  ({LABEL})",
-      PCMAP, PROB_LEV, OUT_F/"stoch_p_occ_all_panel.png", "Annual Probability")
-
-compare(rp_g[10],  HIST/"rp_10yr_hail.tif",  "10-Year Return Period Hail",
-        HCMAP, HAIL_LEV, OUT_F/"stoch_vs_hist_rp_10yr_comparison.png",  "Hail Size (inches)")
-compare(rp_g[100], HIST/"rp_100yr_hail.tif", "100-Year Return Period Hail",
-        HCMAP, HAIL_LEV, OUT_F/"stoch_vs_hist_rp_100yr_comparison.png", "Hail Size (inches)")
-compare(poc_any,  HIST/"p_occurrence.tif",
-        "Annual Hail Occurrence Probability (≥ 0.25\")",
-        PCMAP, PROB_LEV, OUT_F/"stoch_vs_hist_p_occurrence_comparison.png", "Annual Probability")
-
-print(f"\n=== Done: {len(list(OUT_D.glob('*.tif')))} TIFs, {len(list(OUT_F.glob('*.png')))} PNGs ===")
-
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. Validate
+# ═══════════════════════════════════════════════════════════════════════════════
 if not validate_outputs():
-    import sys
     sys.exit(1)
