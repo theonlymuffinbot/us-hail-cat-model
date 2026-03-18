@@ -1029,45 +1029,14 @@ def _nearest_cell(lat, lon):
     col = int(round((lon - LON_ORIG - CS / 2) / CS))
     return max(0, min(row, NROWS-1)), max(0, min(col, NCOLS-1))
 
-def _ep_from_annual(annual_vals, n_sim):
-    """
-    Given sorted annual values, return (return_periods, exceedance_values).
-    OEP: worst event per year.
-    Exceedance probability at rank r (1-indexed, sorted descending) = r / n_sim.
-    Return period = n_sim / r.
-    """
-    sorted_desc = np.sort(annual_vals)[::-1]
-    ranks       = np.arange(1, n_sim + 1)
-    ep          = ranks / n_sim          # annual exceedance probability
-    rp          = n_sim / ranks          # return period in years
-    return rp, ep, sorted_desc
 
-# Build per-city annual series from the simulation
-# We need ann_max per cell — stored in the full ann_max array (N_SIM, N_ACT)
-# ann_max is in scope only if simulation ran; otherwise load from TIFs (maps-only mode)
+# EP curves are derived entirely from the stochastic RP TIFs + historical RP TIFs —
+# no need for ann_max in memory. Available whenever the TIFs exist.
+_ep_available = all((TIFS / f"stoch_rp_{rp}yr_hail.tif").exists() for rp in RP_YRS)
+if not _ep_available:
+    print("  Stochastic RP TIFs not found — skipping EP curves.", flush=True)
 
-if not MAPS_ONLY and 'ann_max' not in dir():
-    # ann_max was deleted after statistics; need per-cell series
-    # Re-derive from the already-computed rp_g and poc_g is insufficient —
-    # we need the actual annual series for smooth EP curves.
-    # We'll load from stochastic event_summary if available, otherwise skip.
-    print("  ann_max not in memory — EP curves require full simulation run.", flush=True)
-    _ep_available = False
-else:
-    _ep_available = not MAPS_ONLY
-
-# For MAPS_ONLY mode, try loading pre-saved per-cell annual arrays
-if MAPS_ONLY:
-    _cell_ann_path = STOCH / "ann_max_cells.npy"
-    if _cell_ann_path.exists():
-        print("  Loading cached ann_max_cells.npy ...", flush=True)
-        _ann_max_cells = np.load(_cell_ann_path)   # (N_SIM, N_ACT)
-        _ep_available  = True
-    else:
-        print("  No cached cell data for EP curves in --maps-only mode; skipping.", flush=True)
-        _ep_available  = False
-
-if _ep_available and not MAPS_ONLY:
+if _ep_available:
     # ann_max was deleted post-statistics — need to re-run a lightweight per-cell extract
     # Instead we derive EP curves from the stochastic maps (RP TIFs → inverted to EP curves)
     # This gives smooth, consistent curves directly from the simulation output
@@ -1297,7 +1266,7 @@ if _ep_available and not MAPS_ONLY:
     print("  EP curves complete.", flush=True)
 
 else:
-    print("  Skipping EP curves (--maps-only without cached cell data).", flush=True)
+    print("  Stochastic RP TIFs not found — skipping EP curves.", flush=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
