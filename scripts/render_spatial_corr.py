@@ -204,7 +204,7 @@ ax.text(0.03, 0.10,
         bbox=dict(boxstyle='round', facecolor='#fff3cd', alpha=0.9),
         zorder=10)
 
-# ── Right: model choice with literature justification ────────────────────
+# ── Right: literature reference values ────────────────────────────────────
 ax2 = axes[1]
 
 lam_options = [30, 100, 150, 200, 300]
@@ -212,7 +212,7 @@ colors_opt  = ['#aaaaaa', '#f5a623', '#4CAF50', '#c00000', '#7B1FA2']
 styles_opt  = [':', '--', '--', '-', '--']
 widths_opt  = [1.5, 1.8, 1.8, 2.5, 1.8]
 for lam, col, ls, lw2 in zip(lam_options, colors_opt, styles_opt, widths_opt):
-    lbl = (f'λ = {lam} km  ({"empirical fit" if lam==30 else "literature" if lam!=200 else "model choice"})')
+    lbl = (f'λ = {lam} km  ({"empirical fit" if lam==30 else "literature reference"})')
     ax2.plot(d_fit, exp_decay(d_fit, lam), color=col, ls=ls, lw=lw2, label=lbl)
 
 ax2.axvline(200, color='#c00000', lw=0.8, ls=':', alpha=0.6)
@@ -239,7 +239,7 @@ ax2.text(0.03, 0.10,
          zorder=10)
 
 fig.suptitle('Spatial Correlation in Hail Intensity — Empirical Sparsity vs. Literature-Informed Model\n'
-             'Source: NOAA SPC 2004–2025  ·  800 hail-belt cells  ·  Gaussian copula, λ = 200 km',
+             'Source: NOAA SPC 2004–2025  ·  800 hail-belt cells  ·  Spatial correlation diagnostic (stochastic uses event-resampling)',
              fontsize=12, fontweight='bold', y=0.98)
 fig.text(0.5, 0.01,
          'Note: SPC point reports yield median event footprint of 9 cells (~225 km²) at 0.25° resolution. '
@@ -382,230 +382,6 @@ fig2.suptitle('Example Historical Hail Events — Peak Hail Size per 0.25° Cell
 savefig(fig2, "corr_event_examples.png")
 
 # ════════════════════════════════════════════════════════════════════════════
-# FIGURE 3 — Copula illustration: historical + simulated + pairwise scatter
-# ════════════════════════════════════════════════════════════════════════════
-print("\nFigure 3: Copula illustration...")
-
-# Use the largest-footprint event for (a)
-ev_ref   = ev_a
-eid_ref  = int(ev_ref['event_id'])
-peak_ref = event_peak[eid_ref]
-
-# Simulate one copula draw
-chol_L  = np.load(os.path.join(ROOT, "cholesky_L.npy"))
-rng2    = np.random.default_rng(7)
-z       = rng2.standard_normal(800)
-u_corr  = chol_L @ z
-from scipy.stats import norm as sci_norm
-u_pctile = sci_norm.cdf(u_corr)
-
-sim_field = np.zeros((NROWS, NCOLS), dtype=np.float32)
-cell_ts_all = event_peak[:, corr_rows, corr_cols]  # (N_events, 800)
-for ci in range(800):
-    col_ts = cell_ts_all[:, ci]
-    nz     = col_ts[col_ts > 0]
-    if len(nz) > 0:
-        q = np.quantile(nz, u_pctile[ci])
-        sim_field[corr_rows[ci], corr_cols[ci]] = max(float(q), 0.0)
-
-real_m = np.ma.masked_less_equal(peak_ref,  0)
-sim_m  = np.ma.masked_less_equal(sim_field, 0)
-
-# Centroid of real event
-r_act, c_act = np.where(peak_ref > 0)
-cr_c = int(np.mean(r_act))
-cc_c = int(np.mean(c_act))
-lat_c, lon_c = row_col_to_latlon(cr_c, cc_c)
-
-# Find near (<200 km) and far (>600 km) cells with event history
-near_cell, far_cell = None, None
-for ri in range(NROWS):
-    for ci in range(NCOLS):
-        lat_i, lon_i = row_col_to_latlon(ri, ci)
-        d = haversine(lat_c, lon_c, lat_i, lon_i)
-        if event_peak[:, ri, ci].max() > 0:
-            if near_cell is None and 80 < d < 200:
-                near_cell = (ri, ci, d)
-            if far_cell is None and d > 700:
-                far_cell  = (ri, ci, d)
-        if near_cell and far_cell:
-            break
-    if near_cell and far_cell:
-        break
-
-fig3 = plt.figure(figsize=(18, 11), facecolor='white')
-gs3  = GridSpec(2, 3, figure=fig3, hspace=0.28, wspace=0.12,
-                left=0.03, right=0.97, top=0.90, bottom=0.07)
-
-for panel_idx, (data_arr, panel_title) in enumerate([
-    (real_m,  f'(a) Historical Event\n{ev_ref["start_date"].strftime("%Y-%m-%d")}  ·  '
-              f'{int(ev_ref["footprint_area_km2"]):,} km²  ·  peak {ev_ref["peak_hail_max_in"]:.1f}"'),
-    (sim_m,   '(b) Gaussian Copula Draw\nλ = 200 km  ·  single simulation'),
-]):
-    ax_p = fig3.add_subplot(gs3[0, panel_idx], projection=PROJ)
-    add_map_features(ax_p, lw=0.5)
-    ax_p.imshow(data_arr, origin='upper', extent=[LON0, LON1, LAT0, LAT1],
-                transform=DATA_PROJ, cmap=EV_CMAP, norm=EV_NORM,
-                interpolation='nearest', zorder=2)
-    ax_p.set_title(panel_title, fontsize=9.5, fontweight='bold', pad=4)
-
-# Shared colorbar (top right of gs3[0,2])
-ax_cb = fig3.add_subplot(gs3[0, 2])
-ax_cb.axis('off')
-sm3 = plt.cm.ScalarMappable(cmap=EV_CMAP, norm=EV_NORM)
-sm3.set_array([])
-cbar3 = fig3.colorbar(sm3, ax=ax_cb, fraction=0.6, pad=0.05, aspect=12)
-cbar3.set_label('Peak Hail (inches)', fontsize=10, labelpad=10)
-cbar3.set_ticks(EV_BOUNDS[1:-1])
-cbar3.set_ticklabels(['0.25"','0.5"','1.0"','1.5"','2.0"','2.5"','3.0"','4.0"+'], fontsize=8)
-cbar3.ax.tick_params(length=0)
-
-# Pairwise scatter
-ax_sc = fig3.add_subplot(gs3[1, 2])
-if near_cell and far_cell:
-    ts_ctr  = event_peak[:, cr_c, cc_c]
-    ts_near = event_peak[:, near_cell[0], near_cell[1]]
-    ts_far  = event_peak[:, far_cell[0],  far_cell[1]]
-    bn  = (ts_ctr > 0) | (ts_near > 0)
-    bf  = (ts_ctr > 0) | (ts_far  > 0)
-    rn  = spearmanr(ts_ctr[bn], ts_near[bn])[0] if bn.sum()>4 else np.nan
-    rf  = spearmanr(ts_ctr[bf], ts_far[bf])[0]  if bf.sum()>4 else np.nan
-
-    ax_sc.scatter(ts_ctr[bn], ts_near[bn], s=22, alpha=0.65, color='#2b7bba',
-                  label=f'Near ({near_cell[2]:.0f} km)  ρ = {rn:.2f}', zorder=3)
-    ax_sc.scatter(ts_ctr[bf], ts_far[bf],  s=22, alpha=0.65, color='#e05000',
-                  label=f'Far  ({far_cell[2]:.0f} km)   ρ = {rf:.2f}',  zorder=3)
-    ax_sc.plot([0, ts_ctr.max()], [0, ts_ctr.max()], 'k--', lw=0.8, alpha=0.3)
-    ax_sc.set_xlabel('Center Cell Peak Hail (in)', fontsize=10)
-    ax_sc.set_ylabel('Comparison Cell Peak Hail (in)', fontsize=10)
-    ax_sc.set_title('(e) Pairwise Hail Co-occurrence', fontsize=10, fontweight='bold')
-    ax_sc.legend(fontsize=9, framealpha=0.9)
-    ax_sc.grid(True, alpha=0.2, ls=':')
-    ax_sc.set_facecolor('#fafafa')
-    ax_sc.tick_params(labelsize=9)
-
-# Decay rings on CONUS map
-ax_rings = fig3.add_subplot(gs3[1, :2], projection=PROJ)
-add_map_features(ax_rings, lw=0.5)
-ax_rings.imshow(real_m, origin='upper', extent=[LON0, LON1, LAT0, LAT1],
-                transform=DATA_PROJ, cmap=EV_CMAP, norm=EV_NORM,
-                interpolation='nearest', zorder=2, alpha=0.80)
-
-for lam_km, col, ls2 in [(200, '#1565C0', '-'), (400, '#e65100', '--'), (800, '#880e4f', ':')]:
-    rho_val = exp_decay(lam_km, LAMBDA_KM)
-    deg_lat = lam_km / 111.0
-    circle  = plt.Circle((lon_c, lat_c), deg_lat,
-                          transform=DATA_PROJ._as_mpl_transform(ax_rings),
-                          fill=False, edgecolor=col, linewidth=2.0,
-                          linestyle=ls2, zorder=6, alpha=0.9)
-    ax_rings.add_patch(circle)
-    ax_rings.annotate(f'{lam_km} km  ρ={rho_val:.2f}',
-                      xy=(lon_c + deg_lat*0.68, lat_c + deg_lat*0.68),
-                      xycoords=DATA_PROJ._as_mpl_transform(ax_rings),
-                      fontsize=8.5, color=col, fontweight='bold',
-                      bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.80),
-                      zorder=7)
-
-ax_rings.plot(lon_c, lat_c, 'k*', markersize=14, transform=DATA_PROJ, zorder=8)
-ax_rings.set_title('(d) Event Centroid with Correlation Decay Rings (λ = 200 km)',
-                   fontsize=10, fontweight='bold', pad=4)
-
-fig3.suptitle('Gaussian Copula Spatial Correlation — Historical vs Simulated Event\n'
-              'Source: NOAA SPC 2004–2025  ·  λ = 200 km',
-              fontsize=12, fontweight='bold', y=0.975)
-savefig(fig3, "corr_copula_illustration.png")
-
-# ════════════════════════════════════════════════════════════════════════════
-# FIGURE 4 — Correlation Matrix Comparison (fixed layout)
-# ════════════════════════════════════════════════════════════════════════════
-print("\nFigure 4: Correlation matrix comparison...")
-
-sort_idx   = np.argsort(corr_lons)
-s_rows     = corr_rows[sort_idx]
-s_cols     = corr_cols[sort_idx]
-s_lats     = corr_lats[sort_idx]
-s_lons     = corr_lons[sort_idx]
-
-N_SHOW = 200
-sub_r  = s_rows[:N_SHOW]
-sub_c  = s_cols[:N_SHOW]
-sub_lat = s_lats[:N_SHOW]
-sub_lon = s_lons[:N_SHOW]
-
-# Model matrix
-D = np.zeros((N_SHOW, N_SHOW))
-for i in range(N_SHOW):
-    for j in range(i+1, N_SHOW):
-        d = haversine(sub_lat[i], sub_lon[i], sub_lat[j], sub_lon[j])
-        D[i, j] = D[j, i] = d
-C_model = exp_decay(D, LAMBDA_KM)
-
-# Empirical matrix
-ts_sub = event_peak[:, sub_r, sub_c].T   # (200, N_events)
-C_emp  = np.eye(N_SHOW)
-for i in range(N_SHOW):
-    for j in range(i+1, N_SHOW):
-        s1, s2 = ts_sub[i], ts_sub[j]
-        valid  = (s1 > 0) | (s2 > 0)
-        if valid.sum() >= 5:
-            r, _ = spearmanr(s1[valid], s2[valid])
-            C_emp[i, j] = C_emp[j, i] = float(r) if np.isfinite(r) else 0.0
-
-fig4 = plt.figure(figsize=(16, 7), facecolor='white')
-gs4  = GridSpec(1, 3, figure=fig4, width_ratios=[1, 1, 0.06],
-                left=0.07, right=0.97, top=0.83, bottom=0.10,
-                wspace=0.18)
-
-ax4a = fig4.add_subplot(gs4[0, 0])
-im4a = ax4a.imshow(C_model, vmin=0, vmax=1, cmap='RdYlBu_r',
-                   interpolation='nearest', aspect='auto')
-ax4a.set_title('(a) Model: exp(−d / λ),  λ = 200 km\n'
-               '200 hail-belt cells ordered W → E',
-               fontsize=11, fontweight='bold', pad=8)
-ax4a.set_xlabel('Cell index (W → E)', fontsize=10)
-ax4a.set_ylabel('Cell index (W → E)', fontsize=10)
-ax4a.tick_params(labelsize=9)
-
-# Separate colorbar for model (0 to 1)
-cax4a = fig4.add_axes([ax4a.get_position().x1 + 0.003,
-                        ax4a.get_position().y0,
-                        0.012,
-                        ax4a.get_position().height])
-cb4a = fig4.colorbar(im4a, cax=cax4a)
-cb4a.set_label('ρ', fontsize=10, labelpad=6)
-cb4a.ax.tick_params(labelsize=8, length=0)
-
-ax4b = fig4.add_subplot(gs4[0, 1])
-im4b = ax4b.imshow(C_emp, vmin=-0.2, vmax=0.5, cmap='RdYlBu_r',
-                   interpolation='nearest', aspect='auto')
-ax4b.set_title('(b) Empirical: Spearman ρ on Annual Max\n'
-               '200 hail-belt cells ordered W → E',
-               fontsize=11, fontweight='bold', pad=8)
-ax4b.set_xlabel('Cell index (W → E)', fontsize=10)
-ax4b.set_ylabel('Cell index (W → E)', fontsize=10)
-ax4b.tick_params(labelsize=9)
-
-cax4b = fig4.add_axes([ax4b.get_position().x1 + 0.003,
-                        ax4b.get_position().y0,
-                        0.012,
-                        ax4b.get_position().height])
-cb4b = fig4.colorbar(im4b, cax=cax4b)
-cb4b.set_label('ρ', fontsize=10, labelpad=6)
-cb4b.ax.tick_params(labelsize=8, length=0)
-
-emp_mean = C_emp[np.triu_indices(N_SHOW, k=1)].mean()
-mod_mean = C_model[np.triu_indices(N_SHOW, k=1)].mean()
-
-fig4.suptitle('Spatial Correlation Structure — Model vs Empirical\n'
-              f'200 Hail-Belt Cells (W→E)  ·  '
-              f'Model mean ρ = {mod_mean:.3f}  ·  Empirical mean ρ = {emp_mean:.3f}',
-              fontsize=12, fontweight='bold', y=0.98)
-fig4.text(0.5, 0.01,
-          'Source: NOAA SPC 2004–2025  ·  Model: exponential decay, λ=200 km  ·  '
-          'Empirical: Spearman ρ on annual max, pairs with ≥5 joint events  ·  '
-          'Low empirical ρ reflects SPC report sparsity at 0.25° resolution',
-          fontsize=8, color='#444', ha='center')
-savefig(fig4, "corr_matrix_comparison.png")
 
 print(f"\nAll figures saved to {OUT_DIR}/")
 for f in sorted(os.listdir(OUT_DIR)):
