@@ -77,13 +77,6 @@ python run_pipeline.py --dry-run      # preview without running
 python run_pipeline.py --validate     # check outputs only, no computation
 ```
 
-**Render maps after stages 10–13:**
-
-```bash
-python scripts/render_maps.py            # RP + p_occ maps
-python scripts/render_spatial_corr.py   # spatial correlation diagnostics
-```
-
 > **Note:** Stages 3, 6, 7, 8, and 14 skip existing files and are safe to re-run after interruption.
 
 ---
@@ -106,9 +99,7 @@ python scripts/render_spatial_corr.py   # spatial correlation diagnostics
 | 12 | `12_build_occurrence_probs.py` | Build annual occurrence probability rasters (8 thresholds) | ~5 min |
 | 13 | `13_apply_conus_mask.py` | Apply CONUS mask + spatial smoothing to all output rasters | ~5 min |
 | 14 | `14_generate_stochastic_catalog.py` | 50,000-yr event-resampling catalog + occurrence/aggregate PETs | ~2.5 hrs |
-| 15 | `15_stochastic_maps.py` | Per-cell stochastic RP + p_occ maps from simulation | ~15 min |
-| — | `render_maps.py` | Render historical RP + p_occ maps to PNG | ~5 min |
-| — | `render_spatial_corr.py` | Render spatial correlation diagnostic figures | ~2 min |
+| 15 | `15_render_figures.py` | Stochastic simulation (50,000 yr) + all figures: historical, stochastic, analysis, EP curves | ~45 min |
 
 Each stage validates its outputs on completion and exits with code 1 if any files are corrupt or missing, stopping the pipeline chain.
 
@@ -133,9 +124,7 @@ us-hail-cat-model/
 │   ├── 12_build_occurrence_probs.py
 │   ├── 13_apply_conus_mask.py
 │   ├── 14_generate_stochastic_catalog.py
-│   ├── 15_stochastic_maps.py
-│   ├── render_maps.py
-│   └── render_spatial_corr.py
+│   └── 15_render_figures.py
 │
 ├── data/
 │   ├── population/
@@ -172,7 +161,10 @@ us-hail-cat-model/
 │   ├── data_dictionary.md
 │   ├── reproduce.md
 │   ├── explainer.md
-│   └── figures/maps/              ← rendered PNG maps
+│   └── figures/
+│       ├── historical/            ← SPC / observed-data maps
+│       ├── stochastic/            ← stochastic catalog maps
+│       └── analysis/              ← comparison charts, diagnostics
 │
 ├── logs/                          ← per-stage run logs (gitignored)
 ├── run_pipeline.py

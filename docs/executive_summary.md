@@ -53,7 +53,7 @@ The model is built entirely from publicly available NOAA Storm Prediction Center
 
 **Event identification:** Synoptic-system grouping — two hail days are combined into one event if the temporal gap is ≤1 day AND the footprints overlap within an 83 km buffer (3 grid cells). Hard cap of 5 days maximum per event to prevent conflating separate synoptic systems. Single storm days default to individual events. Consistent with NOAA/SPC outbreak definitions and AIR/RMS conventions. Damage threshold: 1.0" (residential asphalt shingles). Event catalog includes centroid_lat/lon.
 
-**Stochastic catalog (event-resampling):** Each simulated event draws a historical event template from the event catalog, weighted by seasonal proximity (exp(−|doy_diff|/30)). Intensity is perturbed by a log-normal factor (σ=0.15) to add year-to-year variability while preserving real spatial footprint geometry. This replaces the previous field-based Cholesky copula approach, which generated unrealistic per-cell spatial patterns not grounded in historical event geometry.
+**Stochastic catalog (event-resampling):** Each simulated event draws a historical event template from the event catalog, weighted by seasonal proximity (exp(−|doy_diff|/30)). Intensity is perturbed by a log-normal factor (σ=0.15) to add year-to-year variability while preserving real spatial footprint geometry.
 
 ---
 

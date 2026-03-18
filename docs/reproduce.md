@@ -18,12 +18,24 @@ pip install numpy rasterio xarray scipy pandas regionmask lmoments3 pyarrow
 ## Directory Layout
 
 ```
-data/                         # population normalization pipeline
-  download_population.py                  # Step 1
-  build_population_trend.py               # Step 2
-  download_spc.py                         # Step 3
-  build_storm_trends.py                   # Step 4
-  build_spatial_beta.py                   # Step 5
+scripts/
+  01_download_population.py               # Step 1
+  02_build_population_trend.py            # Step 2
+  03_download_spc.py                      # Step 3
+  04_build_storm_trends.py               # Step 4
+  05_build_spatial_beta.py               # Step 5
+  06_build_hail_rasters.py               # Step 6
+  07_build_hail_debias.py                # Step 7
+  08_build_hail_agg.py                   # Step 8
+  09_build_hail_climo.py                 # Step 9
+  10_hail_catmodel_pipeline.py           # Step 10
+  11_build_smooth_cdf.py                 # Step 11
+  12_build_occurrence_probs.py           # Step 12
+  13_apply_conus_mask.py                 # Step 13
+  14_generate_stochastic_catalog.py      # Step 14
+  15_render_figures.py                   # Step 15
+
+data/
   population/
     county_population.csv                 ← Step 1 output
     county_population_trend.csv           ← Step 2 output
@@ -36,17 +48,7 @@ data/                         # population normalization pipeline
     national_storm_trends.csv             ← Step 4 output
     county_storm_spatial.csv              ← Step 5 output
     county_beta_map.csv                   ← Step 5 output
-
-data/                    # hail cat model
-  build_hail_rasters.py                   # Step 6
-  build_hail_debias.py                    # Step 7
-  build_hail_agg.py                       # Step 8
-  build_hail_climo.py                     # Step 9
-  hail_catmodel_pipeline.py               # Step 10
-  build_smooth_cdf.py                     # Step 11
-  build_occurrence_probs.py               # Step 12
-  apply_conus_mask.py                     # Step 13
-  hail/
+  hail_0.05deg/
     YYYY/hail_YYYYMMDD.tif                ← Step 6 output (0.05°, raw)
   hail_0.05deg_pop_debias/
     YYYY/hail_YYYYMMDD.tif                ← Step 7 output (0.05°, debiased)
@@ -54,17 +56,28 @@ data/                    # hail cat model
     YYYY/hail_YYYYMMDD.tif                ← Step 8 output
     event_catalog.csv                     ← Step 10 output
     event_peak_array.npy                  ← Step 10 output
-    p_occurrence.tif                      ← Step 10 output
+    p_occurrence.tif                      ← Steps 10/11 output
     rp_{10,25,50,100,200,250,500}yr_hail.tif  ← Steps 10/11 output
     p_occ_{T}in.tif                       ← Step 12 output
     lambda_km.json                        ← Step 10 output
-    cholesky_L.npy                        ← Step 10 output
-  hail_0.25deg_CDF/
-    daily_cdf.tif                         ← Step 10b output
-    weibull_params.tif                    ← Step 10b output
-    return_periods.tif                    ← Step 10b output
+    cholesky_L.npy                        ← Step 10 output (diagnostics only)
+    corr_cell_idx.npy                     ← Step 10 output
+    active_flat_idx.npy                   ← Step 10 output (used by step 15)
   hail_0.25deg_climo/
     climo_MMDD.tif (366 files)            ← Step 9 output
+  stochastic/
+    pet_occurrence.csv                    ← Step 14 output
+    pet_aggregate.csv                     ← Step 14 output
+    active_flat_idx.npy                   ← Step 14 output
+    maps/
+      stoch_rp_{10,25,50,100,200,500}yr_hail.tif  ← Step 15 output
+      stoch_p_occurrence.tif              ← Step 15 output
+      stoch_p_occ_{T}in.tif              ← Step 15 output (8 thresholds)
+
+docs/figures/
+  historical/                             ← Step 15 output: SPC/observed maps
+  stochastic/                             ← Step 15 output: stochastic maps
+  analysis/                               ← Step 15 output: comparisons + diagnostics
 ```
 
 ---
@@ -387,12 +400,7 @@ python3 hail_catmodel_pipeline.py
 - `cholesky_L.npy` — Cholesky factor (retained for spatial correlation diagnostics)
 - `corr_cell_idx.npy` — active cell indices
 
-**Also covers `build_hail_cdf.py` (Weibull alternative):**  
-For each resolution, separately fits a 2-parameter Weibull to non-zero hail days (not annual maxima), and derives return periods via compound Poisson:
-```
-x = λ × (−ln(−ln(1−1/T) / rate))^(1/k)
-```
-Output: `hail_0.25deg_CDF/daily_cdf.tif`, `weibull_params.tif`, `return_periods.tif`
+
 
 ---
 
@@ -477,102 +485,94 @@ python3 apply_conus_mask.py
 
 ### Step 14 — Generate Stochastic Catalog and PET
 
-**Script:** `data/generate_stochastic_catalog.py`
+**Script:** `scripts/14_generate_stochastic_catalog.py`
 
-Generates a 50,000-year stochastic occurrence catalog and derives Probable Exceedance Tables (PET).
+Generates a 50,000-year stochastic occurrence catalog using **event-resampling** and derives Probable Exceedance Tables (PET).
 
 **Inputs:**
-- `hail_0.25deg/cholesky_L_150km.npy` — 800×800 Cholesky factor (Step 10)
-- `hail_0.25deg/corr_cell_idx.npy` — seed cell indices (Step 10)
-- `hail_0.25deg/p_occurrence.tif` — annual P_occ per cell (Step 11)
-- `hail_0.25deg/event_peak_array.npy` — for CDF table build (Step 10)
-- `hail_0.25deg/event_catalog.csv` — for Poisson rate + seasonality (Step 10)
-- `hail_0.25deg_climo/climo_MMDD.tif` — 366 daily climatology files (Step 9)
+- `hail_0.25deg/event_catalog.csv` — historical events with dates, footprint, peak hail (Step 10)
+- `hail_0.25deg/event_peak_array.npy` — peak hail per event per cell (Step 10)
 
 **Parameters:**
 ```
-LAMBDA_KM         = 150.0    Spatial decorrelation length (km)
-N_SIM_YEARS       = 50,000
-LAMBDA_EVENTS     = 127.3    Poisson rate (2928 events / 23 years)
-THRESHOLD_IN      = 0.25     Minimum hail size stored (inches)
-GPD_THRESH_IN     = 2.0      GPD tail threshold
-N_QUANT           = 2000     CDF lookup table resolution
-CELL_SAMPLE_YEARS = 2,000    Years of full cell data for validation
-RNG_SEED          = 42
+N_SIM_YEARS   = 50,000
+SIGMA_PERTURB = 0.15      Log-normal intensity perturbation
+RNG_SEED      = 42
+THRESH        = 1.0"      Damage threshold for footprint counting
+MAX_HAIL_PHYS = 10.0"     Physical ceiling
+SEASONAL_TAU  = 30 days   Decay for seasonal template weighting
 ```
 
-**Algorithm:**
+**Algorithm (event-resampling):**
 
-*Pre-computation (done once, cached to disk):*
-1. Build parent-child correlation mapping: each of 12,811 active cells assigned to its nearest seed cell; `ρ = exp(−dist / 150km)`.
-2. Build per-cell CDF lookup table `(2000 × 12811)` float32 from lognormal+GPD fits. **Important:** 88 cells with blown-up GPD extrapolations are refitted using empirical quantiles only. All values clamped to ≤ 10" physical ceiling.
+1. Load event catalog and event_peak_array; compute λ = n_events / n_years_of_record.
+2. Fit a KDE-smoothed seasonal DOY distribution from historical event dates (Gaussian σ=10 days, wrapped at year boundaries).
 
-*Per simulated year:*
-1. Draw `N_events ~ Poisson(127.3)`
-2. For each event:
-   - Draw calendar date from smoothed historical event-date distribution (seasonal)
-   - Load climo seasonal P_occ for that DOY to modulate cell-level occurrence probability
-   - Generate correlated z-scores for 800 seed cells via `z = L @ randn(800)`
-   - Extend to all 12,811 active cells: `z_cell = ρ·z_parent + √(1−ρ²)·ε`
-   - Map to uniform via Φ(z); apply zero-inflation using seasonal P_occ
-   - Map non-zero uniforms through CDF lookup table → hail size in inches
-   - Retain cells ≥ 0.25"
-3. Stream event summary row to CSV; stream cell rows for sample years
+*Per simulated year (50,000 iterations):*
+1. Draw N ~ Poisson(λ)
+2. For each of N events:
+   - Draw a day-of-year from the seasonal KDE distribution
+   - Compute seasonal template weights: `exp(−|doy_diff| / 30)`, draw one historical event
+   - Apply log-normal intensity perturbation: multiply all hail values by `exp(σ·ε)`, ε ~ N(0,1)
+   - Clamp to [0, 10"] physical ceiling
+   - Record n_cells ≥ 1.0", max_hail_in, footprint_km²
+3. Track annual-max and annual-aggregate metrics
 
 *Post-simulation:*
-- Sort 50,000 annual maxima to derive occurrence and aggregate PETs
+Sort 50,000 annual arrays to derive marginal PETs at standard return periods.
 
-**Run:**
 ```bash
-cd hail_model
-PYTHONPATH=/path/to/site-packages python3 generate_stochastic_catalog.py
+python scripts/14_generate_stochastic_catalog.py
 ```
 
-Runtime: ~2.5 hours. Peak memory: ~1.4 GB. CDF table is cached — re-runs skip the build step.
+Runtime: ~2.5 hours. Peak memory: ~1.4 GB.
 
 **Outputs in `data/stochastic/`:**
 
 | File | Description |
 |---|---|
-| `stochastic_event_summary.csv` | One row per simulated event: sim_year, event_idx, template_event_id, doy, n_cells, max_hail_in, mean_hail_in, footprint_km2 |
-| `stochastic_cell_sample.csv` | Cell-level data for validation sample years |
+| `stochastic_event_summary.csv` | One row per simulated event: sim_year, template_event_id, doy, n_cells, max_hail_in, footprint_km2 |
 | `pet_occurrence.csv` | Occurrence PET: return_period_yr, max_hail_in, n_cells (worst single event per year) |
 | `pet_aggregate.csv` | Aggregate PET: return_period_yr, agg_n_cells, agg_events (annual totals) |
-| `ann_occ_max_hail.npy` | Annual max hail (worst event per year), shape (50000,) |
-| `ann_occ_n_cells.npy` | Annual n_cells (worst event per year), shape (50000,) |
+| `active_flat_idx.npy` | Flat indices of active cells; required by Step 15 |
+| `ann_occ_max_hail.npy` | Annual max hail intensity (worst event per year), shape (50000,) |
+| `ann_occ_n_cells.npy` | Annual n_cells of worst event per year, shape (50000,) |
 | `ann_agg_n_cells.npy` | Annual aggregate n_cells (all events summed), shape (50000,) |
 
 ---
 
-### Step 15 — Per-Cell Stochastic Hazard Maps
+### Step 15 — Unified Figure Renderer + Stochastic Maps
 
-**Script:** `scripts/15_stochastic_maps.py`
+**Script:** `scripts/15_render_figures.py`
 
-Runs a fast 3,000-year partial re-simulation using all cached inputs (CDF lookup table, Cholesky factor, p_occurrence, daily climatology) to produce per-cell stochastic return period and occurrence probability maps. All 366 climatology rasters are pre-loaded into memory — no per-event disk I/O. Peak memory ~1.5 GB.
+Runs a 50,000-year stochastic simulation using event-resampling (same methodology as stage 14), then renders all figures for the project.
 
-**Requires Step 14 outputs** (cdf_lookup.npy, cholesky_L_150km.npy, active_flat_idx.npy, p_occurrence.tif, climo rasters).
+**Requires:** Stage 14 outputs (`active_flat_idx.npy`), plus `event_catalog.csv` and `event_peak_array.npy` from stage 10.
 
 ```bash
-python scripts/15_stochastic_maps.py
+python scripts/15_render_figures.py              # full run (sim + all figures)
+python scripts/15_render_figures.py --maps-only  # skip simulation, use existing TIFs
+python scripts/15_render_figures.py --sim-only   # simulation + TIFs only, no figures
+python scripts/15_render_figures.py --validate   # check outputs without running
 ```
 
-**Runtime:** ~15 minutes. **Memory:** ~1.5 GB peak.
+**Runtime:** ~30–45 minutes. **Memory:** ~2.5 GB peak.
 
 **GeoTIFF outputs in `data/stochastic/maps/`:**
 
 | File | Description |
 |---|---|
 | `stoch_rp_{10,25,50,100,200,500}yr_hail.tif` | Per-cell stochastic return period hail size (inches) |
-| `stoch_p_occurrence.tif` | Annual P(hail ≥ 0.25") from simulation |
+| `stoch_p_occurrence.tif` | Annual P(hail ≥ 1.0") from simulation (damaging hail) |
 | `stoch_p_occ_{threshold}in.tif` | Annual P(hail ≥ threshold) for 8 thresholds (0.25"–5.00") |
 
-**Figure outputs in `docs/figures/stochastic/`:**
-- Individual maps for each return period and threshold
-- `stoch_rp_all_panel.png` — 6-panel return period comparison
-- `stoch_p_occ_all_panel.png` — 6-panel occurrence probability comparison
-- `stoch_vs_hist_rp_10yr_comparison.png` — side-by-side historical vs stochastic 10yr RP
-- `stoch_vs_hist_rp_100yr_comparison.png` — side-by-side historical vs stochastic 100yr RP
-- `stoch_vs_hist_p_occurrence_comparison.png` — side-by-side p_occ comparison
+**Figure outputs:**
+
+| Folder | Contents |
+|---|---|
+| `docs/figures/historical/` | Historical RP maps (7 return periods), p_occ maps (8 thresholds), panels |
+| `docs/figures/stochastic/` | Stochastic RP maps (6 return periods), p_occ maps (8 thresholds), panels |
+| `docs/figures/analysis/` | Historical vs stochastic comparison charts (all RP + all p_occ), OEP/AEP EP curves for Oklahoma City / Dallas / St. Louis / Chicago / Washington DC / New York City, spatial correlation diagnostics |
 
 ---
 

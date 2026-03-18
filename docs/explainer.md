@@ -342,9 +342,7 @@ Each raster shows the fraction of years (out of 22) where that size was exceeded
 | `data/hail_0.25deg/` | `rp_{T}yr_hail.tif` | Return period maps: 10/25/50/100/200/250/500yr |
 | `data/hail_0.25deg/` | `lambda_km.json` | Fitted decorrelation length (33.5 km) |
 | `data/hail_0.25deg/` | `cholesky_L.npy` | 800×800 Cholesky factor for simulation |
-| `data/hail_0.25deg_CDF/` | `daily_cdf.tif` | Empirical quantile bands (p50–p99.9) |
-| `data/hail_0.25deg_CDF/` | `weibull_params.tif` | Weibull shape, scale, rate per cell |
-| `data/hail_0.25deg_CDF/` | `return_periods.tif` | 2/5/10/25/50/100yr from Weibull |
+
 | `data/hail_0.25deg_climo/` | `climo_MMDD.tif` | Daily climatology (366 files, 29 bands each) |
 
 ---
@@ -354,7 +352,7 @@ Each raster shows the fraction of years (out of 22) where that size was exceeded
 With this model in hand, you can:
 1. **Look up the hail hazard at any location** — "what does the 100-year hail look like in Wichita, KS?"
 2. **Run portfolio loss estimates** — given a set of insured properties, how much would a 1-in-50-year hail year cost?
-3. **Generate synthetic event sets** — using the Cholesky correlation structure, simulate thousands of years of spatially-correlated hail events
+3. **Generate synthetic event sets** — using the event-resampling stochastic catalog, simulate thousands of years of hail activity preserving real event footprint geometry
 4. **Produce risk maps** — show where hail risk is highest after controlling for population reporting bias
 
 ---
@@ -367,57 +365,44 @@ A stochastic catalog is a synthetic dataset of millions of simulated events desi
 
 Why 50,000 years? Because rare events — the 1-in-1,000-year hailstorm, the 1-in-10,000-year event — don't show up in 23 years of historical data. By simulating 50,000 years of synthetic hail activity, we get robust statistics even at very long return periods.
 
-The result: **6,367,856 synthetic hail events**, each with a date, footprint, and hail intensity field.
+The result: millions of synthetic hail events, each preserving the spatial geometry of a real historical event.
 
 ---
 
-### How the Simulation Works
+### How the Simulation Works (Event-Resampling)
 
 **Step 1: How many events this year?**
 
-Historical data shows an average of **127.3 hail events per year** across CONUS (2,928 events / 23 years). We treat this as a Poisson process — each simulated year draws a random number from a Poisson distribution with that mean. Some years get 110 events, some get 145.
+The historical record contains a fixed number of events over the years observed. We compute λ = n_events / n_years and treat event occurrence as a Poisson process — each simulated year draws a random count from Poisson(λ). Some years get fewer events, some more.
 
 **Step 2: When does each event occur?**
 
-We fit a seasonal probability distribution from the historical event dates. The distribution has a strong peak around **day 234** (late August) with secondary peaks in spring. Every synthetic event draws a calendar date from this distribution, so the model produces more events in summer than in winter — matching the real world.
+We fit a KDE-smoothed seasonal distribution from historical event dates (Gaussian, σ=10 days, wrapped at year boundaries). Every synthetic event draws a calendar date from this distribution — more events in late spring and summer, fewer in winter.
 
-**Step 3: Seasonally-adjusted occurrence probability**
+**Step 3: Pick a historical template**
 
-The climatology rasters (Step 9 from the cat model) tell us which grid cells are more active on any given calendar day. A cell in Oklahoma has high activity in May; a cell in Minnesota has higher activity in July. The seasonal P_occ modulates each cell's probability of seeing hail on the specific day of the event.
+For each synthetic event, we pick one real historical event as a template. Events are weighted by seasonal proximity: `weight = exp(−|historical_doy − drawn_doy| / 30)`. A May event gets May templates; an August event gets August templates. This preserves both the seasonality and the real spatial footprint geometry of actual storm systems.
 
-**Step 4: The spatially correlated hail field**
+**Step 4: Perturb intensity**
 
-This is the core of the simulation. For each event:
+The selected template's hail field is multiplied by a log-normal scaling factor: `exp(σ·ε)` where σ=0.15 and ε ~ N(0,1). This adds ±~15% year-to-year variability in log-space while keeping the spatial structure of the event intact. All values are clamped to [0, 10"] physical ceiling.
 
-1. Generate 800 correlated standard normal values using the Cholesky factor: `z = L @ randn(800)`
-2. Extend to all 12,811 active cells via parent-child kriging: each cell inherits the z-score of its nearest seed cell, blended with independent noise: `z_cell = ρ·z_seed + √(1−ρ²)·noise`
-   - ρ = exp(−distance / 150 km) — cells close to a seed cell are highly correlated; distant cells are nearly independent
-3. Convert z-scores to uniform probabilities using the standard normal CDF
-4. Apply zero-inflation: cells where the uniform is less than (1 − P_occ_seasonal) get zero hail
-5. For the remaining cells, look up the hail size in the pre-computed CDF table
+**Step 5: Count and store**
 
-**Step 5: Threshold and store**
-
-Only cells with hail ≥ 0.25 inches are kept. This produces a sparse representation — for most events, only a few hundred to a few thousand of the 12,811 cells have significant hail.
+Cells with perturbed hail ≥ 1.0" (damage threshold) are counted. Annual trackers record the worst single event (occurrence) and the season total (aggregate).
 
 ---
 
 ### The Probable Exceedance Table (PET)
 
-After simulating all 50,000 years, we rank the **worst single event per year** by footprint area (the "occurrence" metric) and read off the exceedance curve:
+After simulating all 50,000 years, we rank the **worst single event per year** by intensity (the "occurrence" metric) and the **annual total geographic exposure** (the "aggregate" metric):
 
-| Return Period | Max Hail | Footprint | Cells |
-|---|---|---|---|
-| 2-year | 8.89" | 1,897,434 km² | 2,464 |
-| 10-year | 8.89" | 2,661,336 km² | 3,456 |
-| 100-year | 8.97" | 2,917,767 km² | 3,789 |
-| 500-year | 9.43" | 3,029,426 km² | 3,934 |
-| 1,000-year | 9.48" | 3,076,400 km² | 3,995 |
-| 10,000-year | 9.53" | 3,196,530 km² | 4,151 |
+- **`pet_occurrence.csv`:** `return_period_yr, max_hail_in, n_cells` — the worst single event per year
+- **`pet_aggregate.csv`:** `return_period_yr, agg_n_cells, agg_events` — annual total cells hit across all events
 
-**Why is max hail nearly flat?** With 127 events/year across 12,811 grid cells — that's over 1.6 million cell-days per year — the probability of *some* cell somewhere in CONUS experiencing near-record hail in any given year is essentially 1.0. The CONUS-wide annual maximum is always near the top of the distribution. The real exceedance signal lives in the **footprint**: how large an area gets hit by a major event. That grows from ~1.9 million km² at the 2-year level to ~3.2 million km² at 10,000 years — a 70% increase in affected area.
+**Why is max hail nearly flat across return periods?** With ~127 events/year across thousands of active grid cells, near-record hail *somewhere* in CONUS is virtually certain every year. The CONUS-wide annual maximum is always near the top of the distribution. The real exceedance signal lives in the **footprint**: how large an area gets hit simultaneously — which grows substantially from 2-year to 10,000-year return periods.
 
-For location-specific or portfolio work, the right approach is to slice `stochastic_event_summary.csv` by the cells that overlap your area of interest, rather than reading CONUS-wide PET numbers.
+For location-specific or portfolio work, join `stochastic_event_summary.csv` to cells of interest via `event_peak_array.npy` and the event catalog.
 
 ---
 
@@ -425,9 +410,9 @@ For location-specific or portfolio work, the right approach is to slice `stochas
 
 | File | Description |
 |---|---|
-| `stochastic/stochastic_event_summary.csv` | 6,367,856 rows — one per synthetic event (year, date, n_cells, max hail, footprint) |
-| `stochastic/stochastic_cell_sample.csv` | Full cell-level hail values for a 2,000-year validation sample |
-| `stochastic/pet_occurrence.csv` | Occurrence PET (worst event/year) — 50,000 rows, one per return period step |
-| `stochastic/pet_aggregate.csv` | Aggregate PET (annual max hail and total footprint across all events) |
-| `stochastic/ann_*.npy` | Annual tracker arrays — fast PET recomputation without re-simulating |
-| `stochastic/cdf_lookup.npy` | (2000 × 12,811) pre-computed CDF table |
+| `stochastic/stochastic_event_summary.csv` | One row per synthetic event (sim_year, template_event_id, doy, n_cells, max_hail_in, footprint_km2) |
+| `stochastic/pet_occurrence.csv` | Occurrence PET: return_period_yr, max_hail_in, n_cells |
+| `stochastic/pet_aggregate.csv` | Aggregate PET: return_period_yr, agg_n_cells, agg_events |
+| `stochastic/ann_occ_max_hail.npy` | Annual max hail intensity (worst event per year), shape (50000,) |
+| `stochastic/ann_occ_n_cells.npy` | Annual n_cells of worst event per year, shape (50000,) |
+| `stochastic/ann_agg_n_cells.npy` | Annual aggregate cell-events (all events summed), shape (50000,) |

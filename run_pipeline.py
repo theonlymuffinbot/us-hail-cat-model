@@ -70,7 +70,7 @@ STAGES = [
     (12, "12_build_occurrence_probs.py",    "Compute annual occurrence probabilities",  "~5 min"),
     (13, "13_apply_conus_mask.py",          "Apply CONUS land mask",                    "~5 min"),
     (14, "14_generate_stochastic_catalog.py","Generate 50,000-yr stochastic catalog",  "~2.5 hrs"),
-    (15, "15_stochastic_maps.py",           "Build per-cell stochastic PET maps",       "~15 min"),
+    (15, "15_render_figures.py",             "Render all figures (stochastic + historical + analysis)", "~15 min"),
 ]
 
 # ANSI colours

@@ -50,47 +50,6 @@ Only written for days with at least one SPC hail report. Missing dates = no hail
 
 ---
 
-## CDF Layer Files
-
-### `daily_cdf.tif`
-
-| Band | Percentile | Typical range | Notes |
-|---|---|---|---|
-| 1 | p50 | 0.0" for most cells | Most cells get zero hail on median day |
-| 2 | p75 | 0.0" | |
-| 3 | p90 | 0.0" | |
-| 4 | p95 | 0.0" | |
-| 5 | p99 | 0.0–1.12" | First non-zero band for many cells |
-| 6 | p99.5 | 0.0–1.87" | |
-| 7 | p99.9 | 0.0–3.12" | |
-
-**Dtype:** float32, **Unit:** inches, **Nodata:** 0.0 (no special nodata)
-
-### `weibull_params.tif`
-
-| Band | Parameter | Unit | Typical value | Notes |
-|---|---|---|---|---|
-| 1 | Weibull shape k | dimensionless | 3.2 mean | k > 1 = right-skewed (increasing failure rate) |
-| 2 | Weibull scale λ | inches | 1.5" mean | Scale at which CDF ≈ 63.2% |
-| 3 | Annual event rate | events/year | 0.9 at 0.25° | Mean hail days per year at cell |
-| 4 | n_events | count | varies | Total hail days in record (2004–2025) |
-
-**Nodata:** 0.0 (cells with < 10 events not fitted)
-
-### `return_periods.tif`
-
-| Band | Return period | Unit | CONUS p90 (0.25°) |
-|---|---|---|---|
-| 1 | 2-year | inches | ~1.10" |
-| 2 | 5-year | inches | ~1.62" |
-| 3 | 10-year | inches | ~1.91" |
-| 4 | 25-year | inches | ~2.19" |
-| 5 | 50-year | inches | ~2.36" |
-| 6 | 100-year | inches | ~2.51" |
-
-**Method:** Compound Poisson: `T = 1 / (1 − exp(−rate × P(X > x)))`
-**Nodata:** 0.0
-
 ---
 
 ## Daily Climatology Files
@@ -194,14 +153,9 @@ Spatial correlation parameters:
 }
 ```
 
-### Cholesky Files
+### `cholesky_L.npy`
 
-| File | Shape | λ | Use |
-|---|---|---|---|
-| `cholesky_L.npy` | 800×800 | 200km | Active — use for simulation |
-| `cholesky_L_100km.npy` | 800×800 | 100km | Reference |
-| `cholesky_L_150km.npy` | 800×800 | 150km | Used in stochastic catalog (Step 14) |
-| `cholesky_L_200km.npy` | 800×800 | 200km | Same as active |
+Shape: (800, 800), dtype float64. Cholesky factor for the spatial correlation matrix at λ=200 km. **Retained for diagnostics only** — the stochastic catalog (step 14) and per-cell maps (step 15) use event-resampling, not copula simulation.
 
 ### `corr_cell_idx.npy`
 
@@ -230,7 +184,7 @@ To recover (row, col): `row = idx // 236`, `col = idx % 236`
 | `scripts/12_build_occurrence_probs.py` | `data/hail_0.25deg/p_occ_*.tif` | 5 min |
 | `scripts/13_apply_conus_mask.py` | Masked rasters | 5 min |
 | `scripts/14_generate_stochastic_catalog.py` | `data/stochastic/` | 2.5 hrs |
-| `scripts/test_lambda_comparison.py` | Cholesky variants + comparison plot | 10 min |
+| `scripts/15_render_figures.py` | `docs/figures/{historical,stochastic,analysis}/` | ~15 min |
 
 ---
 
@@ -238,48 +192,47 @@ To recover (row, col): `row = idx // 236`, `col = idx % 236`
 
 ### `pet_occurrence.csv`
 
-Occurrence Probable Exceedance Table. Each row represents one return period step derived from 50,000 simulated annual maxima (worst single event per year by footprint).
+Occurrence Probable Exceedance Table. Each row represents one return period step derived from 50,000 simulated annual maxima (worst single event per year by intensity).
 
 | Column | Type | Unit | Description |
 |---|---|---|---|
 | `return_period_yr` | float | years | Return period (e.g., 2, 5, 10, 25, 50, 100, 200, 500, 1000, 10000) |
-| `max_hail_in` | float | inches | Maximum hail size in the exceedance event |
-| `footprint_km2` | float | km² | Total footprint area of the exceedance event |
-| `n_cells` | int | count | Number of 0.25° cells with hail ≥ 0.25" in the exceedance event |
+| `max_hail_in` | float | inches | Peak hail size of the worst single event |
+| `n_cells` | int | count | Number of 0.25° cells with hail ≥ 1.0" in the worst single event |
 
 ### `pet_aggregate.csv`
 
-Aggregate Probable Exceedance Table. Annual aggregate metric: maximum hail and total footprint summed across all events in a year.
+Aggregate Probable Exceedance Table. Annual aggregate geographic exposure across all events in a year.
 
 | Column | Type | Unit | Description |
 |---|---|---|---|
 | `return_period_yr` | float | years | Return period |
-| `agg_max_hail_in` | float | inches | Annual maximum hail size (across all events in year) |
-| `agg_footprint_km2` | float | km² | Sum of footprints for all events in year |
+| `agg_n_cells` | int | count | Annual sum of cell-events (cells ≥ 1.0" across all events in year) |
+| `agg_events` | int | count | Total number of events in the year |
 
-### `stochastic_event_summary.csv` *(gitignored, 289 MB)*
+### `stochastic_event_summary.csv` *(gitignored)*
 
-One row per simulated event. 6,367,856 total rows.
+One row per simulated event.
 
 | Column | Type | Unit | Description |
 |---|---|---|---|
 | `sim_year` | int | — | Simulated year (1 to 50,000) |
-| `event_idx` | int | — | Event index within the simulated year (0-indexed) |
+| `template_event_id` | int | — | Historical event used as spatial template |
 | `doy` | int | — | Day of year the event occurs (1–366) |
-| `n_cells` | int | count | Cells with hail ≥ 0.25" |
+| `n_cells` | int | count | Cells with hail ≥ 1.0" (damage threshold) |
 | `max_hail_in` | float | inches | Maximum hail size across all cells in this event |
-| `mean_hail_in` | float | inches | Mean hail size across active cells |
-| `p95_hail_in` | float | inches | 95th percentile hail size across active cells |
-| `footprint_km2` | float | km² | Footprint area (n_cells × cell area) |
+| `footprint_km2` | float | km² | Footprint area (n_cells × 770 km²) |
 
 ### Annual Tracker Arrays (`ann_*.npy`)
 
-Five NumPy arrays, each shape (50000,) float32 — one value per simulated year. Used for fast PET recomputation without re-running the simulation.
+Three NumPy arrays, each shape (50000,) float32 — one value per simulated year.
 
 | File | Description | Unit |
 |---|---|---|
-| `ann_occ_max_hail.npy` | Annual occurrence max hail (worst single event) | inches |
-| `ann_occ_fp_km2.npy` | Annual occurrence footprint (worst single event) | km² |
-| `ann_occ_n_cells.npy` | Annual occurrence cell count (worst single event) | count |
-| `ann_agg_max_hail.npy` | Annual aggregate max hail (across all events) | inches |
-| `ann_agg_fp_km2.npy` | Annual aggregate footprint (sum across all events) | km² |
+| `ann_occ_max_hail.npy` | Annual max hail intensity (worst single event) | inches |
+| `ann_occ_n_cells.npy` | Annual cell count of worst single event | count |
+| `ann_agg_n_cells.npy` | Annual aggregate cell-events (all events summed) | count |
+
+### `active_flat_idx.npy`
+
+Shape: (N_ACT,), dtype int64. Flat indices (row-major into 104×236) of cells with any hail activity in the historical record. Required input for `15_render_figures.py`.

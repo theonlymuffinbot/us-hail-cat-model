@@ -1,6 +1,6 @@
 # CONUS Hail Catastrophe Model: Full Methodology
 
-**Date:** 2026-03-16
+**Date:** 2026-03-18
 
 ---
 
@@ -100,11 +100,13 @@ The Gaussian copula answers this by transforming each variable into a standard n
 
 In our model, we build a Gaussian copula across 800 representative grid cells using a Cholesky decomposition of the correlation matrix (see Glossary). This lets us simulate correlated hail fields across CONUS in a computationally efficient way.
 
-#### Stochastic Simulation
+#### Stochastic Simulation (Event-Resampling)
 
-With only 22 years of historical data, statistics beyond the 50-year return period are poorly constrained. A stochastic simulation extends the record by generating thousands of synthetic years that are statistically consistent with the historical data. The idea is: use the historical data to estimate the parameters of a model (the CDF, the spatial correlation, the event frequency), then run that model forward for 50,000 years of synthetic history.
+With only 22 years of historical data, statistics beyond the 50-year return period are poorly constrained. A stochastic simulation extends the record by generating thousands of synthetic years statistically consistent with the historical data.
 
-The result is not a prediction — it does not tell you exactly what will happen in any given future year. Rather, it samples the probability space far more densely than 22 years of observation could, giving stable estimates of probabilities at very long return periods (1,000 years, 10,000 years) that would be essentially uncomputable from the historical record alone.
+This model uses **event-resampling** (bootstrap): each simulated event draws a historical event template from the catalog (weighted by seasonal proximity) and applies a log-normal intensity perturbation (σ=0.15). Real spatial footprint geometry is preserved — unlike purely synthetic approaches that generate per-cell fields from parametric distributions. The Poisson rate λ governs how many events occur per year; the seasonal KDE distribution governs when they occur.
+
+The result is not a prediction. Rather, it densely samples the probability space defined by the historical template library, giving stable estimates at very long return periods (1,000 years, 10,000 years) that the 22-year historical record alone cannot support.
 
 ### 2.5 Return Periods and Exceedance Probability
 
@@ -447,15 +449,9 @@ Also applies a second round of spatial smoothing to the p_occ rasters using the 
 
 **Why we need it:** With only 22 years of observations, return period estimates beyond ~50 years are highly uncertain. Simulating 50,000 years gives us thousands of "realizations" of rare events — enough to estimate the 10,000-year return period with reasonable confidence.
 
-**Why event-resampling instead of per-cell field generation (the previous approach):**
+**Why event-resampling:**
 
-The previous version (v2) generated hail fields from scratch using per-cell CDF lookups combined with a Gaussian copula (Cholesky decomposition). This is called a "field-based" approach. It was wrong in two ways:
-
-1. **Spatial geometry was synthetic.** The footprint shapes were purely emergent from the correlation structure of the copula. With a decorrelation length λ = 150 km fitted to sparse SPC point reports, the simulated footprints did not resemble real storm systems. Real events have coherent spatial structure determined by synoptic meteorology — a squall line, a supercell cluster, a broad stratiform precipitation shield — that a simple exponential copula cannot reproduce.
-
-2. **PET metrics were not insurance-relevant.** The previous `ann_occ_fp_km2` (worst footprint km² per year) and `ann_agg_fp_km2` (annual total footprint) are raw area metrics. Insurance cat models care about **occurrence intensity** (how bad was the worst event this year?) and **aggregate exposure** (how much total geographic exposure was hit during the year?). These are measured in hail intensity and cell counts, not raw area.
-
-The event-resampling approach preserves real spatial footprint geometry because each simulated event is a perturbed copy of a real historical event.
+Event-resampling preserves real spatial footprint geometry — each simulated event is a perturbed copy of a real historical event. Real events have coherent spatial structure determined by synoptic meteorology (squall lines, supercell clusters, stratiform shields) that no synthetic parametric field can reproduce. The PET metrics — `max_hail_in` and `n_cells` for occurrence, `agg_n_cells` for aggregate — are directly relevant to reinsurance treaty analysis.
 
 **How it works:**
 
@@ -509,7 +505,18 @@ The occurrence metrics are relevant for per-event reinsurance structures (catast
 
 **Outputs in `data/stochastic/`:** `stochastic_event_summary.csv` (one row per simulated event with template_event_id), `pet_occurrence.csv` (`return_period_yr, max_hail_in, n_cells`), `pet_aggregate.csv` (`return_period_yr, agg_n_cells, agg_events`), `ann_occ_max_hail.npy`, `ann_occ_n_cells.npy`, `ann_agg_n_cells.npy`, `active_flat_idx.npy`
 
-**Note on PET values:** The PET table in Section 6 will be updated after re-running the catalog with the new methodology. The numbers will differ from the previous version because the event-resampling approach preserves real event geometry rather than synthesising fields from a copula.
+---
+
+### Step 15: Figure Rendering (`15_render_figures.py`)
+
+**What it does:** Runs a 50,000-year stochastic simulation (same event-resampling methodology as Step 14) to produce per-cell return period and occurrence probability GeoTIFFs, then renders all project figures including EP curves for key cities.
+
+**Figure folders:**
+- `docs/figures/historical/` — historical RP maps (7 return periods), historical p_occ maps (8 thresholds), panels
+- `docs/figures/stochastic/` — stochastic RP maps (6 return periods), stochastic p_occ maps (8 thresholds), panels
+- `docs/figures/analysis/` — historical vs stochastic comparison charts (all RP + all p_occ thresholds), OEP/AEP EP curves for key cities, spatial correlation diagnostics
+
+**GeoTIFF outputs in `data/stochastic/maps/`:** `stoch_rp_{10,25,50,100,200,500}yr_hail.tif`, `stoch_p_occurrence.tif`, `stoch_p_occ_{threshold}in.tif` (8 thresholds, 0.25"–5.00")
 
 ---
 
@@ -517,41 +524,41 @@ The occurrence metrics are relevant for per-event reinsurance structures (catast
 
 ### Return Period Maps
 
-![10-year return period hail](figures/maps/rp_10yr_hail.png)
+![10-year return period hail](figures/historical/rp_10yr_hail.png)
 
 **Figure 5.1 — 10-Year Return Period Hail (inches).** This map shows, for each 0.25° grid cell, the hail size that is expected to be equaled or exceeded on average once every 10 years. The "Hail Alley" corridor from central Texas through Oklahoma, Kansas, and Nebraska is clearly visible, with 10-year values of 2–3 inches (golf ball to baseball size) across much of the central plains. The Front Range of Colorado and parts of South Dakota also show elevated values.
 
-![100-year return period hail](figures/maps/rp_100yr_hail.png)
+![100-year return period hail](figures/historical/rp_100yr_hail.png)
 
 **Figure 5.2 — 100-Year Return Period Hail (inches).** The 100-year map shows similar spatial patterns to the 10-year map but with higher intensities throughout. The spatial gradient from the high-risk central plains to lower-risk coasts and mountains is sharper at longer return periods because the GPD tail amplifies geographic differences in hail climatology. The highest values (above 5–6 inches) are concentrated in a smaller core of the central plains.
 
-![500-year return period hail](figures/maps/rp_500yr_hail.png)
+![500-year return period hail](figures/historical/rp_500yr_hail.png)
 
 **Figure 5.3 — 500-Year Return Period Hail (inches).** At 500 years, extrapolation uncertainty is substantial. The spatial pattern becomes more erratic because the GPD fit for individual cells is based on very few tail observations. Values above 6 inches appear in the highest-risk cells; the maximum across CONUS exceeds 8 inches — near the 7.12-inch top of the observation bin scale.
 
-![All return period panel](figures/maps/rp_all_panel.png)
+![All return period panel](figures/historical/rp_all_panel.png)
 
 **Figure 5.4 — Return Period Panel (all seven return periods).** Side-by-side comparison of all seven return period maps (10, 25, 50, 100, 200, 250, 500 years). The spatial structure is highly consistent across return periods, confirming that the model is capturing a stable geographic signal rather than noise. The intensity progression from shorter to longer return periods shows a clear but nonlinear increase, consistent with a heavy-tailed distribution.
 
 ### Occurrence Probability Maps
 
-![Annual occurrence probability ≥ 1.0"](figures/maps/p_occurrence.png)
+![Annual occurrence probability ≥ 1.0"](figures/historical/p_occurrence.png)
 
 **Figure 5.5 — Annual Occurrence Probability of Damaging Hail (≥ 1.0").** This map shows the probability that any given year will bring at least one damaging hail event (≥ 1 inch, roughly quarter-size) to each grid cell. The highest probabilities (40–60% annual chance) are in central Oklahoma and south-central Kansas. Most of the Midwest east of the Rockies has at least a 10–20% annual probability.
 
-![Occurrence panel — all thresholds](figures/maps/p_occ_all_panel.png)
+![Occurrence panel — all thresholds](figures/historical/p_occ_all_panel.png)
 
 **Figure 5.6 — Occurrence Probability Panel (all thresholds).** Panel showing annual occurrence probability for all seven size thresholds (0.25", 0.50", 1.50", 2.00", 3.00", 4.00", 5.00"). The geographic footprint shrinks dramatically as the threshold increases — while most of the eastern two-thirds of the US has some probability of small hail, only the core of Hail Alley has meaningful probability of baseball-sized hail.
 
 ### Spatial Correlation Figures
 
-![Correlation decay curve](figures/analysis/correlation_decay_fit.png)
+![Correlation decay curve](figures/analysis/corr_decay_curve.png)
 
 **Figure 5.7 — Spatial Correlation vs. Distance.** Scatter plot of empirical Spearman rank correlations between pairs of grid cells (annual maximum hail series), plotted against inter-cell distance. Each gray dot is one cell pair. The orange curve is the fitted exponential decay model ρ(d) = exp(−d/λ). The fitted λ from empirical data is ~33 km — much shorter than the physics-informed value of 200 km used in the model. The gap between empirical and literature λ reflects the sparsity of SPC point observations at the 0.25° grid scale.
 
-![Lambda comparison](figures/analysis/lambda_comparison.png)
+![Example event footprints](figures/analysis/corr_event_examples.png)
 
-**Figure 5.8 — Lambda Validation: Historical vs. Simulated Distributions.** Comparison of historical and simulated distributions of annual aggregate hail statistics for three λ candidates (100, 150, 200 km). At 200 km, the simulated aggregate variance is ~12% of historical — the closest of the three candidates but still a substantial gap. This gap is the fundamental limitation of SPC-based correlation modeling; future work should use MRMS MESH radar data.
+**Figure 5.8 — Example Historical Hail Events.** Four representative events from the 2004–2025 catalog showing peak hail per 0.25° cell: the largest multi-state outbreak, a Northern Plains event, a Southern Plains/Texas event, and a Midwest event. These event footprint geometries form the template library used by the event-resampling stochastic simulation.
 
 ---
 
@@ -581,19 +588,17 @@ Based on the fitted lognormal + GPD model at key locations (from `data/hail_0.25
 
 ### CONUS-Wide Stochastic PET
 
-> **Note:** The PET numbers below will be updated after re-running the stochastic catalog with the new event-resampling methodology (Step 14). The previous values used a field-based Cholesky copula approach that has been replaced. The columns have also changed: `footprint_km²` has been removed and replaced with `n_cells` (number of 28×28 km grid cells), which is a more interpretable and directly usable metric for portfolio exposure.
-
-From `data/stochastic/pet_occurrence.csv` (the worst-single-event-per-year metric, **to be regenerated**):
+From `data/stochastic/pet_occurrence.csv` (worst single event per year, 50,000-yr event-resampling):
 
 | Return Period | Max Hail (CONUS) | N Cells (worst event) |
 |---|---|---|
-| 2-year | — | — |
-| 10-year | — | — |
-| 100-year | — | — |
-| 500-year | — | — |
-| 10,000-year | — | — |
+| 2-year | see pet_occurrence.csv | see pet_occurrence.csv |
+| 10-year | see pet_occurrence.csv | see pet_occurrence.csv |
+| 100-year | see pet_occurrence.csv | see pet_occurrence.csv |
+| 500-year | see pet_occurrence.csv | see pet_occurrence.csv |
+| 10,000-year | see pet_occurrence.csv | see pet_occurrence.csv |
 
-*Re-run `scripts/14_generate_stochastic_catalog.py` to populate this table.*
+*Values are populated after stage 14 completes. Read directly from `data/stochastic/pet_occurrence.csv`.*
 
 ### Interpreting the Comparison
 
@@ -695,7 +700,7 @@ This event also predates our 2004 data cutoff by less than a year. However, it i
 
 **CDF (Cumulative Distribution Function).** A function F(x) that gives the probability that a random variable X is less than or equal to x: F(x) = P(X ≤ x). The CDF is non-decreasing, ranges from 0 to 1, and fully characterizes a probability distribution. To find the return period T for value x: T = 1/(1 − F(x)). To find the value at return period T: invert F to get x = F⁻¹(1 − 1/T).
 
-**Cholesky decomposition.** A way of factoring a symmetric positive-definite matrix Σ into a lower-triangular matrix L such that L × L^T = Σ. Used in Step 10 to characterize the spatial correlation structure of hail events (retained as `cholesky_L.npy` for diagnostics). The stochastic simulation (Step 14) uses event-resampling rather than Cholesky-based field generation, so this factor is not used in the catalog simulation itself.
+**Cholesky decomposition.** A way of factoring a symmetric positive-definite matrix Σ into a lower-triangular matrix L such that L × L^T = Σ. Computed in Step 10 from the spatial correlation structure of hail events and retained as `cholesky_L.npy` for diagnostic figures. The stochastic simulation (Steps 14 and 15) uses event-resampling, not Cholesky-based field generation.
 
 **CONUS.** Contiguous United States — the 48 states excluding Alaska and Hawaii. Also called the "lower 48." Our model covers the geographic rectangle from 24°N to 50°N latitude and 125°W to 66°W longitude that contains CONUS, with non-CONUS cells masked out in Step 13.
 
@@ -707,7 +712,7 @@ This event also predates our 2004 data cutoff by less than a year. However, it i
 
 **GPD (Generalized Pareto Distribution).** A family of probability distributions specifically designed to model the tail of another distribution — all values exceeding some high threshold τ. Parameterized by a scale σ and shape ξ. If ξ > 0, the distribution has a heavy tail (extreme values are relatively more likely); if ξ < 0, the distribution has a bounded upper tail. Used in our model for hail sizes above 2.0 inches, fitted via L-moments for robustness with small samples.
 
-**Gaussian copula.** A statistical tool for modeling the joint distribution of multiple variables while separating the marginal distributions from the correlation structure. The Gaussian copula assumes that after transforming each variable to a standard normal via its own CDF, the resulting multivariate normal distribution captures all correlation. Used in our model to simulate spatially correlated hail fields: each grid cell has its own CDF (fitted from historical data), and correlations between cells are modeled via a multivariate normal with a spatial covariance structure.
+**Gaussian copula.** A statistical tool for modeling the joint distribution of multiple variables while separating the marginal distributions from the correlation structure. Computed in Step 10 for diagnostic purposes (the Cholesky factor characterizes spatial correlation in the historical record). The stochastic simulation uses event-resampling rather than copula-based field generation — real event footprints preserve spatial structure more faithfully than a parametric copula.
 
 **Hail Alley.** An informal name for the geographic region of the central United States with the highest frequency and intensity of large hail. Generally understood to cover eastern Colorado, southwestern Kansas, western Oklahoma, and the Texas Panhandle, with extensions into Nebraska and South Dakota. Hail Alley is produced by the collision of warm, moist air from the Gulf of Mexico with cold, dry air from the Rockies, generating some of the world's most intense supercell thunderstorms.
 
@@ -731,7 +736,7 @@ This event also predates our 2004 data cutoff by less than a year. However, it i
 
 **Spatial correlation.** The tendency of hail intensities at nearby grid cells to move together — if one cell has an extreme hail year, nearby cells are more likely to also have an extreme year. Modeled in our pipeline as an exponential decay function of distance: ρ(d) = exp(−d/λ). Spatial correlation is critical for modeling aggregate losses across a geographic portfolio, because it determines how much simultaneous extreme exposure can occur across many locations.
 
-**Stochastic catalog.** A synthetic dataset of simulated events representing what could happen over a very long time period. Generated by event-resampling: each simulated event draws a historical template from the event catalog (weighted by seasonal proximity), then perturbs intensity by a log-normal factor (σ=0.15). Spatial footprint geometry is preserved from real historical events. The 50,000-year catalog provides stable statistics at very long return periods. PET outputs: `pet_occurrence.csv` (worst event per year by intensity) and `pet_aggregate.csv` (annual total geographic exposure).
+**Stochastic catalog.** A synthetic dataset of simulated events representing what could happen over a very long time period. Generated by **event-resampling**: each simulated event draws a historical template from the event catalog (weighted by seasonal proximity via exp(−|doy_diff|/30)), then perturbs intensity by a log-normal factor (σ=0.15). Real spatial footprint geometry is preserved. The 50,000-year catalog provides stable statistics at very long return periods. PET outputs: `pet_occurrence.csv` (worst single event per year: `max_hail_in`, `n_cells`) and `pet_aggregate.csv` (annual total geographic exposure: `agg_n_cells`, `agg_events`).
 
 **Zero-inflation.** A statistical phenomenon where a dataset contains more zero values than a standard distribution would predict. In our hail data, most grid cells see hail in only a subset of years — many annual maximum values are zero. A standard lognormal or GPD fit to the full data would be distorted by the excess zeros. We handle this with a two-stage model: first model the probability of any hail occurring (p_occ), then separately model the distribution of hail given that it does occur.
 

@@ -69,9 +69,7 @@ hail_model/
 │   ├── 12_build_occurrence_probs.py
 │   ├── 13_apply_conus_mask.py
 │   ├── 14_generate_stochastic_catalog.py
-│   ├── render_maps.py
-│   ├── render_spatial_corr.py
-│   └── test_lambda_comparison.py
+│   └── 15_render_figures.py
 ├── data/
 │   ├── hail_0.05deg/                 # Raw 0.05° rasters (one tif/day)
 │   │   └── YYYY/hail_YYYYMMDD.tif
@@ -88,7 +86,11 @@ hail_model/
     ├── data_dictionary.md
     ├── methodology.md
     ├── reproduce.md
-    └── explainer.md
+    ├── explainer.md
+    └── figures/
+        ├── historical/     ← SPC / observed-data maps (RP + p_occ)
+        ├── stochastic/     ← stochastic catalog maps (RP + p_occ)
+        └── analysis/       ← comparison charts, spatial correlation diagnostics
 ```
 
 ---
@@ -123,58 +125,27 @@ Aggregates 0.05° rasters by summing within each coarser cell. No interpolation 
 
 ## 4. CDF and Return Period Layer
 
-**Script:** `scripts/10_hail_catmodel_pipeline.py` (Steps 0–3) and `scripts/11_build_smooth_cdf.py`
-**Output dirs:** `data/hail_0.25deg/`, `data/hail_0.25deg_CDF/`
+**Scripts:** `scripts/10_hail_catmodel_pipeline.py` (Steps 0–3) and `scripts/11_build_smooth_cdf.py`
+**Output dir:** `data/hail_0.25deg/`
 
 ### Method
 
-For each resolution, all 8,036 calendar days (2004-01-01 to 2025-12-31) are processed:
-- Storm-day files are loaded (4,704 files); missing days contribute zeros
-- Intensity metric: max hail size per cell per day (highest non-zero bin midpoint)
-- Three output rasters are written:
+For each 0.25° cell, the annual maximum hail series is built from `event_peak_array.npy` (one value per year = maximum peak hail across all events in that year). A zero-inflated two-component model is fitted:
 
-### `daily_cdf.tif` — Empirical Quantile Raster
+- **Occurrence probability** `p_occ`: fraction of years with any hail
+- **Body (hail ≤ 2.0"):** Lognormal distribution, fitted via MLE
+- **Tail (hail > 2.0"):** Generalized Pareto Distribution, fitted via L-moments
+- **Return period inversion:** composite CDF inverted via `scipy.optimize.brentq`
 
-7-band raster. Each band = a percentile of the all-days distribution (including zero/no-hail days):
+Step 11 (`11_build_smooth_cdf.py`) replaces cell-by-cell fits with spatially-pooled fits using a 150 km radius / 75 km Gaussian decay kernel, giving each cell 50–200 effective observations instead of 5–15.
 
-| Band | Percentile |
+### Outputs (`data/hail_0.25deg/`)
+
+| File | Description |
 |---|---|
-| 1 | p50 |
-| 2 | p75 |
-| 3 | p90 |
-| 4 | p95 |
-| 5 | p99 |
-| 6 | p99.5 |
-| 7 | p99.9 |
-
-Units: inches. Note: p50–p95 are typically 0.0 for most cells (most days have no hail).
-
-### `weibull_params.tif` — Weibull Fit Parameters
-
-4-band raster. Weibull fit to **non-zero** event intensities per cell:
-
-| Band | Parameter | Notes |
-|---|---|---|
-| 1 | k (shape) | Dimensionless; ~3.2 mean for fitted cells |
-| 2 | λ (scale) | Inches; ~1.5" mean for fitted cells |
-| 3 | Annual rate | Mean hail days per year |
-| 4 | n_events | Total hail days in record |
-
-Fitted via `scipy.stats.weibull_min` MLE with `floc=0`. Minimum 10 events required to fit.
-
-### `return_periods.tif` — Weibull Return Period Raster
-
-6-band raster. Return period hail sizes from compound Poisson model:
-
-`P(annual exceedance) = 1 - exp(-rate × P(X > x))`
-
-| Band | Return Period |
-|---|---|
-| 1 | 2-year |
-| 2 | 5-year |
-| 3 | 10-year |
-| 4 | 25-year |
-| 5 | 50-year |
+| `rp_{10,25,50,100,200,250,500}yr_hail.tif` | Return period hail size (inches), float32, nodata=-9999 |
+| `p_occurrence.tif` | Annual P(hail ≥ 1.0") per cell |
+| `p_occ_{T}in.tif` | Annual P(hail ≥ T) for T in {0.25,0.50,1.00,1.50,2.00,3.00,4.00,5.00}" |
 | 6 | 100-year |
 
 Units: inches. Zero where insufficient data (< 10 hail days in pixel).
@@ -334,14 +305,13 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 
 | File | Description |
 |---|---|
-| `cholesky_L.npy` | 800×800 Cholesky factor, λ=200km (active) |
-| `cholesky_L_100km.npy` | Candidate Cholesky, λ=100km |
-| `cholesky_L_150km.npy` | Candidate Cholesky, λ=150km |
-| `cholesky_L.npy` | Cholesky factor retained for spatial correlation diagnostics |
-| `corr_cell_idx.npy` | 800 cell indices (into flattened 104×236 grid) for the copula |
-| `lambda_km.json` | Fit metadata and variance ratios for all three candidates |
-| `lambda_comparison.png` | Validation plots: historical vs simulated distributions |
-| `correlation_decay_fit.png` | Empirical correlation decay scatter with model overlay |
+| `cholesky_L.npy` | 800×800 Cholesky factor, λ=200km (retained for diagnostics) |
+| `corr_cell_idx.npy` | 800 cell indices (into flattened 104×236 grid) |
+| `lambda_km.json` | Fit metadata and variance ratios |
+| `docs/figures/analysis/corr_decay_curve.png` | Empirical correlation decay scatter with model overlay (step 15) |
+| `docs/figures/analysis/corr_event_examples.png` | Example historical event footprints (step 15) |
+
+**Note:** The stochastic catalog (step 14) and per-cell maps (step 15) use **event-resampling**, not Gaussian copula simulation. The Cholesky factor and spatial correlation analysis are retained as diagnostic outputs only.
 
 ---
 
@@ -363,21 +333,8 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 | `rp_500yr_hail.tif` | GeoTIFF | 41 KB | 500-year return period hail size (inches) |
 | `bin_midpoints.json` | JSON | 1.2 KB | Bin definitions audit trail |
 | `lambda_km.json` | JSON | 513 B | Spatial correlation parameters and validation |
-| `cholesky_L.npy` | NumPy | 4.9 MB | Active Cholesky factor (800×800, λ=200km) |
-| `cholesky_L_100km.npy` | NumPy | 4.9 MB | Candidate Cholesky, λ=100km |
-| `cholesky_L_150km.npy` | NumPy | 4.9 MB | Candidate Cholesky, λ=150km |
-| `cholesky_L.npy` | NumPy | 4.9 MB | Cholesky factor (spatial correlation diagnostics) |
-| `corr_cell_idx.npy` | NumPy | 6.4 KB | Copula cell indices (800 cells) |
-| `lambda_comparison.png` | PNG | 152 KB | λ validation plots |
-| `correlation_decay_fit.png` | PNG | 138 KB | Correlation decay scatter |
-
-### CDF Layer (`data/hail_0.25deg_CDF/`)
-
-| File | Bands | Description |
-|---|---|---|
-| `daily_cdf.tif` | 7 | Empirical quantiles p50–p99.9, all 8036 days |
-| `weibull_params.tif` | 4 | k, λ, annual_rate, n_events (Weibull fit) |
-| `return_periods.tif` | 6 | 2/5/10/25/50/100yr hail size (Weibull + compound Poisson) |
+| `cholesky_L.npy` | NumPy | 4.9 MB | Cholesky factor (800×800, λ=200km, diagnostics only) |
+| `corr_cell_idx.npy` | NumPy | 6.4 KB | 800 copula cell indices (used by step 15 for correlation diagnostics) |
 
 ### Daily Climatology (`data/hail_0.25deg_climo/`)
 
@@ -411,15 +368,14 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 | Spatial buffer (event grouping) | 3 cells (~83 km) | Step 2 | Synoptic-system migration buffer |
 | Max event duration | 5 days | Step 2 | Prevents conflating separate synoptic systems |
 | Min events for CDF fit | 5 non-zero years | Step 3 | Below this, cell gets no return period |
-| Decorrelation length λ (CDF layer) | 200 km | Step 4 | Literature-informed; 3 candidates tested |
-| Decorrelation length λ (stochastic) | 150 km | Step 14 | Design choice; 200km Cholesky also available |
-| Copula cells | 800 (subsampled) | Step 4 | From 10,270 active cells |
+| Decorrelation length λ (diagnostics) | 200 km | Step 10 | Literature-informed; stored in lambda_km.json |
+| Copula cells (diagnostics) | 800 (subsampled) | Step 10 | Used in step 15 for correlation figures |
 | Simulation length (N_SIM_YEARS) | 50,000 years | Step 14 | Stochastic catalog |
-| Validation simulation length | 2,000 years | λ validation | Used for variance comparison |
-| Poisson rate (LAMBDA_EVENTS) | 127.3 events/yr | Step 14 | 2928 events / 23 years |
-| CDF quantile resolution (N_QUANT) | 2,000 | Step 14 | Lookup table rows |
-| RNG seed (RNG_SEED) | 42 | Step 14 | Reproducibility |
-| Cells empirically refitted | 88 | Step 14 | GPD blowup cells replaced with empirical quantiles |
+| Step 15 simulation length | 50,000 years | Step 15 | Per-cell maps + figures (matches stage 14) |
+| Poisson rate λ | n_events / n_years | Steps 14, 15 | Derived from event_catalog.csv |
+| Intensity perturbation σ | 0.15 | Steps 14, 15 | Log-normal, applied per event |
+| Seasonal weight decay | 30 days | Steps 14, 15 | exp(−\|doy_diff\|/30) |
+| RNG seed | 42 | Steps 14, 15 | Reproducibility |
 
 ---
 
@@ -429,9 +385,7 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 |---|---|---|
 | 10yr RP max > 25yr RP max | Low | Artifact of GPD extrapolation in data-sparse cells; not physically wrong |
 | Partial 2026 included | Low | 15 events through March 11; slightly dilutes annual max tail |
-| λ variance ratio only 12% | Medium | Simulated aggregate variance << historical; SPC data sparsity limitation |
+| Empirical λ ≈ 30 km | Info | SPC report sparsity at 0.25° yields near-zero cross-cell correlation empirically; λ=200km from literature used for diagnostics only — stochastic catalog uses event-resampling, not copula |
 | Population debiasing applied | Info | Step 7 applies β=2.37 correction; urban/rural bias partially corrected |
 | 22-year record | Medium | GPD extrapolation to 500yr carries high uncertainty |
-| Conditional correlation failed | Info | Only 460 co-occurring cell pairs with ≥5 shared events; MRMS needed |
-| Event-resampling stochastic | Info | Stochastic catalog uses historical event templates (not per-cell field generation). Spatial footprint geometry is preserved from real events; intensity is perturbed ±~15% log-normal. |
-| 88 cells empirical-only CDF | Low | GPD extrapolations blew up to physically impossible values; refitted with empirical quantiles, capped at 10 inches |
+| Event-resampling template library | Info | Stochastic catalog draws from 22-year historical event footprints. Novel geometries not in the 2004–2025 record cannot be generated directly. |
