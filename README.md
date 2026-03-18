@@ -187,14 +187,24 @@ us-hail-cat-model/
 
 ### Occurrence PET (CONUS-wide, worst single event per year)
 
-| Return Period | Max Hail | n_cells |
-|---|---|---|
-| 2-year | — | — |
-| 10-year | — | — |
-| 100-year | — | — |
-| 500-year | — | — |
+Derived from 50,000-year event-resampling simulation. Each row is the worst single hail event in a year by peak intensity.
 
-> PET values will be populated after stage 14 completes. `pet_occurrence.csv` tracks `max_hail_in` and `n_cells` of the worst single event per year. `pet_aggregate.csv` tracks annual total `agg_n_cells` (geographic exposure). For per-location analysis, join `stochastic_event_summary.csv` to cells of interest.
+| Return Period | Max Hail (in) | N Cells (≥ 1.0") |
+|---|---|---|
+| 2-year | 5.81" | 87 |
+| 5-year | 6.51" | 191 |
+| 10-year | 7.00" | 215 |
+| 25-year | 7.62" | 400 |
+| 50-year | 8.07" | 433 |
+| 100-year | 8.50" | 433 |
+| 200-year | 8.91" | 486 |
+| 500-year | 9.45" | 540 |
+| 1,000-year | 9.81" | 540 |
+| 10,000-year | 10.00" | 540 |
+
+> `pet_occurrence.csv` tracks `max_hail_in` and `n_cells` (cells ≥ 1.0") of the worst single event per year. `pet_aggregate.csv` tracks annual total `agg_n_cells` (sum of cells hit across all events in a year). For per-location analysis, join `stochastic_event_summary.csv` to cells of interest.
+>
+> **Note on max hail:** The CONUS-wide annual maximum is always near the top of the record because with ~124 events/year, near-record hail *somewhere* in CONUS is virtually certain. The exceedance signal lives in **n_cells** (footprint size) — how large an area gets simultaneously hammered. The `n_cells` column grows substantially from 2-yr to 500-yr, capturing the rare large-footprint years that drive aggregate reinsurance losses.
 
 ---
 
