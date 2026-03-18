@@ -38,7 +38,7 @@ def validate_outputs() -> bool:
     rp_fnames = ["rp_10yr_hail.tif", "rp_25yr_hail.tif", "rp_50yr_hail.tif",
                  "rp_100yr_hail.tif", "rp_200yr_hail.tif", "rp_250yr_hail.tif",
                  "rp_500yr_hail.tif", "p_occurrence.tif"]
-    pocc_fnames = [f"p_occ_{t:.2f}in.tif".replace(".", "p")
+    pocc_fnames = [f"p_occ_{f'{t:.2f}'.replace('.', 'p')}in.tif"
                    for t in [0.25, 0.50, 1.50, 2.00, 3.00, 4.00, 5.00]]
 
     for fname in rp_fnames + pocc_fnames:

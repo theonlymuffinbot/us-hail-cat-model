@@ -41,7 +41,7 @@ def validate_outputs() -> bool:
     import sys
     errors = []
     root = DATA_ROOT / "hail_0.25deg"
-    expected = [f"p_occ_{t:.2f}in.tif".replace(".", "p") for t in THRESHOLDS]
+    expected = [f"p_occ_{f'{t:.2f}'.replace('.', 'p')}in.tif" for t in THRESHOLDS]
 
     for fname in expected:
         p = root / fname
@@ -121,7 +121,7 @@ for thresh in THRESHOLDS:
     # (leave as 0.0 — already correct)
     out = p_occ.astype(np.float32)
 
-    fname = f"p_occ_{thresh:.2f}in.tif".replace(".", "p")  # e.g. p_occ_0p25in.tif
+    fname = f"p_occ_{f'{thresh:.2f}'.replace('.', 'p')}in.tif"  # e.g. p_occ_0p25in.tif
     path  = os.path.join(ROOT, fname)
     with rasterio.open(path, "w", **out_profile) as dst:
         dst.write(out, 1)
@@ -142,7 +142,7 @@ print(f"\nDone in {time.time()-t0:.1f}s")
 print(f"\nOutputs in {ROOT}/:")
 # end of per-threshold loop output listing follows
 for thresh in THRESHOLDS:
-    fname = f"p_occ_{thresh:.2f}in.tif".replace(".", "p")
+    fname = f"p_occ_{f'{thresh:.2f}'.replace('.', 'p')}in.tif"
     path  = os.path.join(ROOT, fname)
     size  = os.path.getsize(path)
     print(f"  {fname}  ({size/1024:.0f} KB)")

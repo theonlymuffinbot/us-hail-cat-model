@@ -372,7 +372,8 @@ for thresh in THRESHOLDS:
     p_occ_t  = np.where(conus_mask,
                         exceeds.sum(axis=0) / N_YEARS,
                         -9999.0).astype(np.float32)
-    fname    = f"p_occ_{thresh:.2f}in.tif".replace(".", "p")
+    thresh_str = f"{thresh:.2f}".replace(".", "p")   # e.g. 0.25 -> "0p25"
+    fname    = f"p_occ_{thresh_str}in.tif"
     path     = os.path.join(ROOT, fname)
     with rasterio.open(path, "w", **out_profile) as dst:
         dst.write(p_occ_t, 1)
