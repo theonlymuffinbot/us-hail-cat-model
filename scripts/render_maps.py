@@ -287,7 +287,11 @@ savefig(fig, "rp_all_panel.png")
 # ════════════════════════════════════════════════════════════════════════════
 print("\nRendering individual occurrence maps...")
 for fname, label, pl in OCC_ORDER:
-    data = prep_occ(os.path.join(ROOT, fname))
+    fpath = os.path.join(ROOT, fname)
+    if not os.path.exists(fpath):
+        print(f"  Skipping {fname} (not yet available)")
+        continue
+    data = prep_occ(fpath)
     bounds, tick_labels = OCC_SCALES[fname]
     max_val = float(np.nanmax(data))
     # Fine levels for smooth contourf
@@ -335,8 +339,22 @@ gs   = GridSpec(2, 4, figure=fig2, hspace=0.08, wspace=0.06,
 
 for idx, (fname, label, pl) in enumerate(OCC_ORDER):
     row, col = divmod(idx, 4)
+    fpath = os.path.join(ROOT, fname)
+    if not os.path.exists(fpath):
+        ax = fig2.add_subplot(gs[row, col])
+        ax.set_facecolor('#f0f0f0')
+        ax.set_xticks([]); ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_edgecolor('#cccccc')
+        ax.text(0.5, 0.5, 'Data\npending', transform=ax.transAxes,
+                ha='center', va='center', fontsize=13, color='#999999',
+                style='italic', fontweight='bold')
+        ax.set_title(f'({pl}) {label}', fontsize=9.5, fontweight='bold', pad=3)
+        print(f"  Placeholder for {fname} (not yet available)")
+        continue
+
     ax = fig2.add_subplot(gs[row, col], projection=PROJ)
-    data = prep_occ(os.path.join(ROOT, fname))
+    data = prep_occ(fpath)
     bounds, tick_labels = OCC_SCALES[fname]
     max_val = float(np.nanmax(data))
     fine_levels = np.linspace(0, min(max_val * 1.05, bounds[-2] * 1.1), 60)
