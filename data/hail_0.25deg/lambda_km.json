@@ -1,0 +1,9 @@
+{
+  "lambda_km": 30.306500835981904,
+  "n_active_cells": 8719,
+  "n_corr_cells": 800,
+  "subsampled": true,
+  "n_years": 23,
+  "damage_threshold_in": 1.0,
+  "gpd_threshold_in": 2.0
+}
