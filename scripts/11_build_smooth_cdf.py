@@ -297,9 +297,9 @@ for idx in range(n_active_cells):
     else:
         c_gpd, scale_gpd = 0.0, 0.5
 
-    # Store p_occ (for the target cell itself)
-    own_nz = annual_max[:, ri, ci]
-    p_occ_arr[ri, ci] = float((own_nz > 0).sum() / N_YEARS)
+    # Store p_occ using the spatially-pooled rate (same smoothing as the CDF)
+    # This avoids noisy per-cell fractions from only 22 binary observations
+    p_occ_arr[ri, ci] = float(p_occ_rate)
 
     # Compute return period values
     for rp in RETURN_PERIODS:
@@ -349,22 +349,24 @@ for rp, fname in RP_NAMES.items():
     log(f"  {fname}  valid cells: {len(valid):,}  "
         f"p50: {np.median(valid):.2f}  max: {valid.max():.2f}")
 
-# p_occurrence
-pocc_path = os.path.join(ROOT, "p_occurrence.tif")
-with rasterio.open(pocc_path, "w", **out_profile) as dst:
-    dst.write(p_occ_arr, 1)
-    dst.update_tags(1,
-        description="Annual occurrence probability (fraction of years >= 1in)",
-        threshold_inches="1.0",
-        method="spatially_pooled",
-        years="2004-2025",
-    )
+# p_occurrence — written as both p_occurrence.tif (used internally by stage 15)
+# and p_occ_1p00in.tif (canonical naming convention matching all other thresholds)
+for pocc_fname in ["p_occurrence.tif", "p_occ_1p00in.tif"]:
+    pocc_path = os.path.join(ROOT, pocc_fname)
+    with rasterio.open(pocc_path, "w", **out_profile) as dst:
+        dst.write(p_occ_arr, 1)
+        dst.update_tags(1,
+            description="Annual occurrence probability (spatially-pooled, >= 1.0\")",
+            threshold_inches="1.0",
+            method="spatially_pooled",
+            years="2004-2025",
+        )
 valid_occ = p_occ_arr[p_occ_arr >= 0]
-log(f"  p_occurrence.tif  valid: {len(valid_occ):,}  max: {valid_occ.max():.3f}")
+log(f"  p_occurrence.tif + p_occ_1p00in.tif  valid: {len(valid_occ):,}  max: {valid_occ.max():.3f}")
 
 # ── Rebuild p_occ threshold TIFs ─────────────────────────────
 log("\nRebuilding p_occ threshold TIFs...")
-THRESHOLDS = [0.25, 0.50, 1.50, 2.00, 3.00, 4.00, 5.00]
+THRESHOLDS = [0.25, 0.50, 1.00, 1.50, 2.00, 3.00, 4.00, 5.00]
 
 # Annual max array already built above
 for thresh in THRESHOLDS:

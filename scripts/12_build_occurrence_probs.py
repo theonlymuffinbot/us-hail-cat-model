@@ -32,7 +32,7 @@ EPK_PATH = os.path.join(ROOT, "event_peak_array.npy")
 REF_TIF  = None  # will use first storm tif for profile
 
 # Thresholds in inches
-THRESHOLDS = [0.25, 0.50, 1.50, 2.00, 3.00, 4.00, 5.00]
+THRESHOLDS = [0.25, 0.50, 1.00, 1.50, 2.00, 3.00, 4.00, 5.00]
 YEARS      = list(range(2004, 2026))   # 2004-2025 complete years
 N_YEARS    = len(YEARS)
 
