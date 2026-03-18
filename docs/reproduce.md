@@ -52,7 +52,6 @@ data/                    # hail cat model
     YYYY/hail_YYYYMMDD.tif                ← Step 7 output (0.05°, debiased)
   hail_0.25deg/
     YYYY/hail_YYYYMMDD.tif                ← Step 8 output
-    char_hail_daily.nc                    ← Step 10 output
     event_catalog.csv                     ← Step 10 output
     event_peak_array.npy                  ← Step 10 output
     p_occurrence.tif                      ← Step 10 output
@@ -339,15 +338,15 @@ The core pipeline. Runs Steps 0–4 of the cat model.
 Reads band metadata. Parses bin midpoints from `size_range` band tags: `Band N: lo=(N-1)×25, hi=lo+24 hundredths`. Validates spatial consistency across 100 random files.
 
 **Step 1 — Daily characteristic hail:**  
-For each day and cell, computes characteristic hail size = **max active bin midpoint** (the largest bin with count > 0). Result: `char_hail_daily.nc` — a 3D xarray (days × rows × cols).
+For each day and cell, computes characteristic hail size = **max active bin midpoint** (the largest bin with count > 0).
 
-**Step 2 — Event identification:**  
+**Step 2 — Event identification (synoptic-system grouping):**  
 Threshold: **1.0 inch** (residential shingle damage threshold).
-1. Find temporal windows where any cell has hail ≥ 1"
-2. Check spatial continuity (binary dilation, 2-cell buffer) — split windows where footprints don't overlap
-3. Result: 2,928 events across 23 years (2004–2025)
+1. Find all hail days where any cell has hail ≥ 1"
+2. Group consecutive days into the same event if: temporal gap ≤ 1 day AND footprints overlap within 83 km (3-cell dilation buffer). Hard cap: 5 days maximum per event.
+3. Days that don't overlap within 83 km are kept as separate events even if consecutive.
 
-Event catalog columns: `event_id, start_date, end_date, duration_days, n_active_cells, footprint_area_km2, peak_hail_max_in, peak_hail_mean_in`
+Event catalog columns: `event_id, start_date, end_date, duration_days, n_active_cells, footprint_area_km2, peak_hail_max_in, peak_hail_mean_in, centroid_lat, centroid_lon`
 
 Also writes `event_peak_array.npy` — shape `(n_events, 104, 236)` — peak hail per event per cell.
 
@@ -379,14 +378,13 @@ python3 hail_catmodel_pipeline.py
 ```
 
 **Outputs in `hail_0.25deg/`:**
-- `char_hail_daily.nc` — 4,720 days × 104 × 236
-- `event_catalog.csv` — 2,928 events
-- `event_peak_array.npy` — (2928, 104, 236) float32
+- `event_catalog.csv` — historical events with centroid_lat/lon
+- `event_peak_array.npy` — (n_events, 104, 236) float32
 - `p_occurrence.tif` — annual occurrence probability
 - `rp_{T}yr_hail.tif` — return period rasters (7 files: 10–500yr)
 - `bin_midpoints.json` — bin definitions
-- `lambda_km.json` — λ = 33.5 km, fitted parameters
-- `cholesky_L.npy` — 800 × 800 Cholesky factor
+- `lambda_km.json` — fitted spatial decorrelation parameters
+- `cholesky_L.npy` — Cholesky factor (retained for spatial correlation diagnostics)
 - `corr_cell_idx.npy` — active cell indices
 
 **Also covers `build_hail_cdf.py` (Weibull alternative):**  
@@ -536,14 +534,13 @@ Runtime: ~2.5 hours. Peak memory: ~1.4 GB. CDF table is cached — re-runs skip 
 
 | File | Description |
 |---|---|
-| `cdf_lookup.npy` | (2000 × 12811) CDF lookup table, cached |
-| `cdf_quant_p.npy` | Quantile probability grid |
-| `active_flat_idx.npy` | Active cell flat indices |
-| `stochastic_event_summary.csv` | 6,367,856 rows: sim_year, event_idx, doy, n_cells, max_hail_in, mean_hail_in, p95_hail_in, footprint_km2 |
-| `stochastic_cell_sample.csv` | Full cell-level data for 2,000 validation years |
-| `pet_occurrence.csv` | Occurrence PET: return_period_yr, max_hail_in, footprint_km2, n_cells |
-| `pet_aggregate.csv` | Aggregate PET: return_period_yr, agg_max_hail_in, agg_footprint_km2 |
-| `ann_*.npy` | Annual tracker arrays for PET recomputation |
+| `stochastic_event_summary.csv` | One row per simulated event: sim_year, event_idx, template_event_id, doy, n_cells, max_hail_in, mean_hail_in, footprint_km2 |
+| `stochastic_cell_sample.csv` | Cell-level data for validation sample years |
+| `pet_occurrence.csv` | Occurrence PET: return_period_yr, max_hail_in, n_cells (worst single event per year) |
+| `pet_aggregate.csv` | Aggregate PET: return_period_yr, agg_n_cells, agg_events (annual totals) |
+| `ann_occ_max_hail.npy` | Annual max hail (worst event per year), shape (50000,) |
+| `ann_occ_n_cells.npy` | Annual n_cells (worst event per year), shape (50000,) |
+| `ann_agg_n_cells.npy` | Annual aggregate n_cells (all events summed), shape (50000,) |
 
 ---
 
@@ -585,17 +582,14 @@ python scripts/15_stochastic_maps.py
 |---|---|
 | National storm β (pop. scaling) | 2.37 |
 | SPC match rate | ~87% |
-| Total hail events (2004–2025) | 2,928 |
-| Spatial decorrelation length λ | 33.5 km |
-| 100-yr hail max (CONUS) | ~6 in |
-| 100-yr hail p90 (CONUS) | ~3.5 in |
-| p_occ ≥ 1.5" max (any cell) | ~0.68 |
-| Stochastic catalog events (50,000yr) | 6,367,856 |
-| Occurrence PET 2yr footprint | ~1,897,434 km² |
-| Occurrence PET 100yr footprint | ~2,917,767 km² |
-| Occurrence PET 100yr max hail | 8.97" |
+| Total hail events (2004–2025) | Updated after stage 10 re-run |
+| Spatial decorrelation length λ | Fitted from historical data (see lambda_km.json) |
+| 100-yr hail p90 (CONUS) | Updated after stages 11–13 re-run |
+| p_occ ≥ 1.5" max (any cell) | Updated after stages 11–13 re-run |
+| Stochastic catalog events (50,000yr) | Updated after stage 14 re-run |
+| Occurrence PET 100yr max hail | Updated after stage 14 re-run |
 
-**Note on max hail PET:** The max hail metric shows limited variation across return periods (8.89"–9.53") because with 127 events/year × 12,811 active cells, extreme hail *somewhere in CONUS* is virtually certain every year. The **footprint** column carries the exceedance signal — it grows meaningfully from ~1.9M km² at 2yr to ~3.2M km² at 10,000yr. For per-location or portfolio work, slice `stochastic_event_summary.csv` by cell rather than reading the CONUS-wide PET.
+**PET metric interpretation:** `pet_occurrence.csv` records the worst single event per simulated year by `max_hail_in` and `n_cells`. `pet_aggregate.csv` records the annual total `agg_n_cells` (sum of cells hit across all events in the year) — this is the aggregate geographic exposure metric. For per-location or portfolio work, join `stochastic_event_summary.csv` to specific cells of interest.
 
 ---
 
@@ -604,7 +598,7 @@ python scripts/15_stochastic_maps.py
 - **Match rate ~87%:** ~13% of SPC rows don't match a FIPS code (non-standard names, territories, offshore). The alias table covers the most common cases.
 - **No tornadoes in trend pipeline:** `build_storm_trends.py` processes `_hail.csv` and `_wind.csv` only.
 - **λ = 33.5 km is short:** The pipeline warns `λ < 100 km — may indicate noise or sparse data`. At 0.25° resolution (~28 km/cell), this decorrelation length implies near-zero correlation beyond 2 cells. May reflect genuine local nature of hail or sparse data at this resolution.
-- **Stochastic λ = 150 km:** The lambda comparison test found 200 km best matches historical variance ratios. 150 km was used per design choice; consider re-running with 200 km (`cholesky_L_200km.npy` already exists).
+- **Event-resampling stochastic:** The catalog draws historical event templates rather than generating per-cell fields. Spatial footprint geometry is preserved from real events; intensity is perturbed ±~15%. Novel event patterns not present in the 22-year historical record are not directly representable.
 - **22–23 years is a short record:** Return periods beyond ~50 years are extrapolated, not empirically observed. GPD tail fit helps but adds uncertainty.
 - **88 cells use empirical CDF only:** These cells had GPD extrapolations that blew up; refitted with empirical quantiles. Their maximum is capped at the observed historical maximum (~9.54").
 - **Population debiasing is approximate:** Nearest-centroid grid assignment is coarser than county polygons. Rural counties with large geographic extent may be assigned cells from an adjacent county.

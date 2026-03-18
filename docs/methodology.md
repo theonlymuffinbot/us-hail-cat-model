@@ -669,7 +669,7 @@ This event also predates our 2004 data cutoff by less than a year. However, it i
 
 ### 8.2 Future Work
 
-**MRMS MESH data.** The most impactful single improvement would be replacing SPC point reports with NOAA MRMS (Multi-Radar Multi-Sensor) Maximum Expected Size of Hail (MESH) data. MESH provides a spatially continuous radar-derived hail size estimate at 0.01° resolution going back to 2015. Using MESH would eliminate the population bias problem entirely (radar does not care how many people are watching), provide much better spatial continuity for correlation estimation, and likely substantially reduce the lambda variance gap.
+**MRMS MESH data.** The most impactful single improvement would be replacing SPC point reports with NOAA MRMS (Multi-Radar Multi-Sensor) Maximum Expected Size of Hail (MESH) data. MESH provides a spatially continuous radar-derived hail size estimate at 0.01° resolution going back to 2015. Using MESH would eliminate the population bias problem entirely (radar does not care how many people are watching) and would enable a much larger and more diverse historical event template library for the stochastic catalog.
 
 **Topographic correction.** Overlay a digital elevation model and parameterize a hail survival function based on altitude, lapse rate, and terrain shape. This would improve model accuracy in mountainous regions and could be validated against the Front Range hail climatology.
 
@@ -681,7 +681,7 @@ This event also predates our 2004 data cutoff by less than a year. However, it i
 
 **Extend template library with MRMS MESH data.** Replacing or supplementing the SPC-based event footprints with NOAA MRMS MESH (Maximum Expected Size of Hail) radar data would allow novel footprint geometries to be generated, removing the 22-year template-library constraint from the event-resampling approach.
 
-**Per-cell PET derivation.** `stochastic_event_summary.csv` (289 MB, gitignored) contains the full 6.3 million event catalog. Spatially joining this to any set of grid cells and building cell-specific exceedance curves would provide per-location stochastic return period estimates — far more useful for portfolio analysis than the CONUS-wide PET.
+**Per-cell PET derivation.** `stochastic_event_summary.csv` (gitignored) contains one row per simulated event with `template_event_id`, `n_cells`, `max_hail_in`, and `footprint_km2`. Spatially joining this to specific cells of interest via `event_peak_array.npy` and the event catalog would provide per-location stochastic return period estimates — far more useful for portfolio analysis than the CONUS-wide PET.
 
 ---
 
@@ -695,7 +695,7 @@ This event also predates our 2004 data cutoff by less than a year. However, it i
 
 **CDF (Cumulative Distribution Function).** A function F(x) that gives the probability that a random variable X is less than or equal to x: F(x) = P(X ≤ x). The CDF is non-decreasing, ranges from 0 to 1, and fully characterizes a probability distribution. To find the return period T for value x: T = 1/(1 − F(x)). To find the value at return period T: invert F to get x = F⁻¹(1 − 1/T).
 
-**Cholesky decomposition.** A way of factoring a symmetric positive-definite matrix Σ into a lower-triangular matrix L such that L × L^T = Σ. Used in our model to efficiently simulate correlated random variables: if ε ~ N(0,I) (independent standard normals), then z = L × ε has covariance L × L^T = Σ, meaning z has exactly the desired spatial correlation structure. The Cholesky factor L is a 800 × 800 matrix computed once and reused for every event simulation.
+**Cholesky decomposition.** A way of factoring a symmetric positive-definite matrix Σ into a lower-triangular matrix L such that L × L^T = Σ. Used in Step 10 to characterize the spatial correlation structure of hail events (retained as `cholesky_L.npy` for diagnostics). The stochastic simulation (Step 14) uses event-resampling rather than Cholesky-based field generation, so this factor is not used in the catalog simulation itself.
 
 **CONUS.** Contiguous United States — the 48 states excluding Alaska and Hawaii. Also called the "lower 48." Our model covers the geographic rectangle from 24°N to 50°N latitude and 125°W to 66°W longitude that contains CONUS, with non-CONUS cells masked out in Step 13.
 
@@ -731,7 +731,7 @@ This event also predates our 2004 data cutoff by less than a year. However, it i
 
 **Spatial correlation.** The tendency of hail intensities at nearby grid cells to move together — if one cell has an extreme hail year, nearby cells are more likely to also have an extreme year. Modeled in our pipeline as an exponential decay function of distance: ρ(d) = exp(−d/λ). Spatial correlation is critical for modeling aggregate losses across a geographic portfolio, because it determines how much simultaneous extreme exposure can occur across many locations.
 
-**Stochastic catalog.** A synthetic dataset of simulated events designed to represent what could happen over a very long time period. Our stochastic catalog contains 6,367,856 synthetic hail events generated over 50,000 simulated years. Each event has a date, a footprint (which grid cells were affected), and hail intensities at each cell. The catalog provides stable statistics at very long return periods and supports aggregate loss analysis.
+**Stochastic catalog.** A synthetic dataset of simulated events representing what could happen over a very long time period. Generated by event-resampling: each simulated event draws a historical template from the event catalog (weighted by seasonal proximity), then perturbs intensity by a log-normal factor (σ=0.15). Spatial footprint geometry is preserved from real historical events. The 50,000-year catalog provides stable statistics at very long return periods. PET outputs: `pet_occurrence.csv` (worst event per year by intensity) and `pet_aggregate.csv` (annual total geographic exposure).
 
 **Zero-inflation.** A statistical phenomenon where a dataset contains more zero values than a standard distribution would predict. In our hail data, most grid cells see hail in only a subset of years — many annual maximum values are zero. A standard lognormal or GPD fit to the full data would be distorted by the excess zeros. We handle this with a two-stage model: first model the probability of any hail occurring (p_occ), then separately model the distribution of hail given that it does occur.
 

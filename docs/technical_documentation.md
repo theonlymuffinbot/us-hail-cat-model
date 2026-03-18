@@ -223,23 +223,24 @@ char_hail = max(bin_midpoint[k] for k in 1..29 if band_k > 0)
 # Returns 0.0 if no hail reported in cell
 ```
 
-Output: `char_hail_daily.nc` — xarray DataArray, shape (4720, 104, 236), units inches.
-
-### Step 2 — Event Identification
+### Step 2 — Event Identification (Synoptic-System Grouping)
 
 **Damage threshold:** 1.0 inches (residential asphalt shingles)
 
-**Temporal clustering:**
-A window opens when any CONUS cell first exceeds 1.0" and closes when no cell exceeds it for a full day.
+**Grouping rule (two-condition test):**
+Two hail days are grouped into the same event if AND ONLY IF:
+1. Temporal gap ≤ 1 day (consecutive, or separated by one quiet day)
+2. Footprints spatially overlap within a **3-cell (83 km) buffer** using `scipy.ndimage.binary_dilation`
 
-**Spatial continuity check:**
-Within each temporal window, consecutive-day footprints are tested for overlap using `scipy.ndimage.binary_dilation` with a 2-cell (~56 km) buffer. Disconnected footprints become separate events.
+**Hard cap:** Maximum 5 days per event. Events longer than 5 days are split at the 5-day mark to prevent conflating separate synoptic systems.
 
-**Results:**
-- 107 candidate temporal windows → 2,928 events after spatial splitting
-- Median event duration: 1 day
-- Median event footprint: 9 cells (~225 km²)
-- Largest event: 867 cells (~670,000 km²)
+Days that fail either condition (temporal OR spatial) remain as individual events.
+
+**Rationale:** The 83 km buffer captures typical synoptic-system migration (30–60 km/day over a 1–2 day gap). The 5-day cap matches NOAA/SPC outbreak period definitions and AIR/RMS event conventions. Single-day events are the most common case.
+
+**Event catalog columns:** `event_id, start_date, end_date, duration_days, n_active_cells, footprint_area_km2, peak_hail_max_in, peak_hail_mean_in, centroid_lat, centroid_lon`
+
+**Results:** Updated after stage 10 re-run with new methodology.
 - Mean events per year: 127
 
 Output: `event_catalog.csv`, `event_peak_array.npy` (2928 × 104 × 236)
@@ -336,7 +337,7 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 | `cholesky_L.npy` | 800×800 Cholesky factor, λ=200km (active) |
 | `cholesky_L_100km.npy` | Candidate Cholesky, λ=100km |
 | `cholesky_L_150km.npy` | Candidate Cholesky, λ=150km |
-| `cholesky_L_200km.npy` | Candidate Cholesky, λ=200km (same as active) |
+| `cholesky_L.npy` | Cholesky factor retained for spatial correlation diagnostics |
 | `corr_cell_idx.npy` | 800 cell indices (into flattened 104×236 grid) for the copula |
 | `lambda_km.json` | Fit metadata and variance ratios for all three candidates |
 | `lambda_comparison.png` | Validation plots: historical vs simulated distributions |
@@ -350,8 +351,7 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 
 | File | Format | Size | Description |
 |---|---|---|---|
-| `char_hail_daily.nc` | NetCDF4 | 442 MB | Daily characteristic hail, 4720 storm days × 104 × 236 |
-| `event_catalog.csv` | CSV | 224 KB | 2,928 events: dates, duration, footprint, peak hail |
+| `event_catalog.csv` | CSV | ~200 KB | Historical events: dates, duration, footprint, peak hail, centroid_lat/lon |
 | `event_peak_array.npy` | NumPy | 274 MB | Peak hail per event (2928 × 104 × 236, float32) |
 | `p_occurrence.tif` | GeoTIFF | 33 KB | Annual hail occurrence probability per cell |
 | `rp_10yr_hail.tif` | GeoTIFF | 41 KB | 10-year return period hail size (inches) |
@@ -366,7 +366,7 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 | `cholesky_L.npy` | NumPy | 4.9 MB | Active Cholesky factor (800×800, λ=200km) |
 | `cholesky_L_100km.npy` | NumPy | 4.9 MB | Candidate Cholesky, λ=100km |
 | `cholesky_L_150km.npy` | NumPy | 4.9 MB | Candidate Cholesky, λ=150km |
-| `cholesky_L_200km.npy` | NumPy | 4.9 MB | Candidate Cholesky, λ=200km |
+| `cholesky_L.npy` | NumPy | 4.9 MB | Cholesky factor (spatial correlation diagnostics) |
 | `corr_cell_idx.npy` | NumPy | 6.4 KB | Copula cell indices (800 cells) |
 | `lambda_comparison.png` | PNG | 152 KB | λ validation plots |
 | `correlation_decay_fit.png` | PNG | 138 KB | Correlation decay scatter |
@@ -392,16 +392,13 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 
 | File | Format | Size | Description |
 |---|---|---|---|
-| `pet_occurrence.csv` | CSV | 2.2 MB | Occurrence PET: return_period_yr, max_hail_in, footprint_km2, n_cells |
-| `pet_aggregate.csv` | CSV | 2.0 MB | Aggregate PET: return_period_yr, agg_max_hail_in, agg_footprint_km2 |
-| `stochastic_event_summary.csv` | CSV | 289 MB *(gitignored)* | 6,367,856 rows: sim_year, event_idx, doy, n_cells, max_hail_in, mean_hail_in, p95_hail_in, footprint_km2 |
-| `stochastic_cell_sample.csv` | CSV | 15 GB *(gitignored)* | Cell-level data for 2,000 validation years |
-| `cdf_lookup.npy` | NumPy | 98 MB *(gitignored)* | Shape 2000×12811 CDF lookup table |
-| `ann_occ_max_hail.npy` | NumPy | 195 KB | Annual occurrence max hail, shape 50000 |
-| `ann_occ_fp_km2.npy` | NumPy | 195 KB | Annual occurrence footprint km², shape 50000 |
-| `ann_occ_n_cells.npy` | NumPy | 195 KB | Annual occurrence cell count, shape 50000 |
-| `ann_agg_max_hail.npy` | NumPy | 195 KB | Annual aggregate max hail, shape 50000 |
-| `ann_agg_fp_km2.npy` | NumPy | 195 KB | Annual aggregate footprint km², shape 50000 |
+| `pet_occurrence.csv` | CSV | ~2 MB | Occurrence PET: return_period_yr, max_hail_in, n_cells (worst single event per year) |
+| `pet_aggregate.csv` | CSV | ~2 MB | Aggregate PET: return_period_yr, agg_n_cells, agg_events (annual totals) |
+| `stochastic_event_summary.csv` | CSV | *(gitignored)* | One row per simulated event: sim_year, event_idx, template_event_id, doy, n_cells, max_hail_in, mean_hail_in, footprint_km2 |
+| `stochastic_cell_sample.csv` | CSV | *(gitignored)* | Cell-level data for validation sample years |
+| `ann_occ_max_hail.npy` | NumPy | 195 KB | Annual max hail intensity (worst event per year), shape (50000,) |
+| `ann_occ_n_cells.npy` | NumPy | 195 KB | Annual n_cells of worst event per year, shape (50000,) |
+| `ann_agg_n_cells.npy` | NumPy | 195 KB | Annual aggregate n_cells (all events summed), shape (50000,) |
 
 ---
 
@@ -411,7 +408,8 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 |---|---|---|---|
 | Damage threshold | 1.0 inches | Step 2, Step 4 | Residential asphalt shingles |
 | GPD tail threshold (GPD_THRESH_IN) | 2.0 inches | Step 3 | Fitted where ≥5 exceedances exist |
-| Spatial buffer (event split) | 2 cells (~56 km) | Step 2 | Accounts for storm translation |
+| Spatial buffer (event grouping) | 3 cells (~83 km) | Step 2 | Synoptic-system migration buffer |
+| Max event duration | 5 days | Step 2 | Prevents conflating separate synoptic systems |
 | Min events for CDF fit | 5 non-zero years | Step 3 | Below this, cell gets no return period |
 | Decorrelation length λ (CDF layer) | 200 km | Step 4 | Literature-informed; 3 candidates tested |
 | Decorrelation length λ (stochastic) | 150 km | Step 14 | Design choice; 200km Cholesky also available |
@@ -435,5 +433,5 @@ Three candidates were tested via Monte Carlo (2,000-year simulation):
 | Population debiasing applied | Info | Step 7 applies β=2.37 correction; urban/rural bias partially corrected |
 | 22-year record | Medium | GPD extrapolation to 500yr carries high uncertainty |
 | Conditional correlation failed | Info | Only 460 co-occurring cell pairs with ≥5 shared events; MRMS needed |
-| lambda=150km in stochastic | Info | lambda=150km used in stochastic (not 200km from section 7.4); 200km best-matched historical variance but 150km chosen per design intent. cholesky_L_200km.npy exists for re-run. |
+| Event-resampling stochastic | Info | Stochastic catalog uses historical event templates (not per-cell field generation). Spatial footprint geometry is preserved from real events; intensity is perturbed ±~15% log-normal. |
 | 88 cells empirical-only CDF | Low | GPD extrapolations blew up to physically impossible values; refitted with empirical quantiles, capped at 10 inches |

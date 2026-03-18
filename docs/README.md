@@ -1,7 +1,7 @@
 # Hail Catastrophe Model
 
-**Built:** 2026-03-14  
-**Status:** Primary hazard layer complete
+**Built:** 2026-03-17  
+**Status:** Primary hazard layer complete — re-running stages 10–15 with corrected event definition and event-resampling stochastic methodology
 
 ## Documents
 
@@ -16,17 +16,17 @@
 | Want to know... | See |
 |---|---|
 | What was built and why | Executive Summary |
-| How the event catalog was constructed | Technical Doc §6.2 |
-| Why λ = 200 km | Technical Doc §7 |
+| How the event catalog was constructed | Technical Doc — Step 2 (synoptic-system grouping) |
+| How the stochastic catalog works | Methodology §4 Step 14 (event-resampling) |
 | What's in `rp_100yr_hail.tif` | Data Dictionary — Return Period Rasters |
-| How to use `cholesky_L.npy` | Technical Doc §7.2, Data Dictionary |
+| What the PET metrics mean | Reproduce Guide — PET metric interpretation |
 | Known issues before production use | Executive Summary — Known Limitations |
 
 ## Data Location
 
 ```
-/Volumes/bitcoin/data/
+/Volumes/bitcoin/GitHub/us-hail-cat-model/data/
 ├── hail_0.25deg/          ← Cat model outputs + storm rasters
-├── hail_0.25deg_CDF/      ← Empirical CDF + Weibull + return periods
 ├── hail_0.25deg_climo/    ← 366 daily climatology files
+├── stochastic/            ← Stochastic catalog outputs
 ```
